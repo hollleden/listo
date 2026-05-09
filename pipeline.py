@@ -4,8 +4,8 @@ import json
 import logging
 import os
 
+import httpx
 from mistralai import Mistral
-from mistralai.models import UserMessage, ImageURLChunk, TextChunk
 
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 _client = Mistral(api_key=MISTRAL_API_KEY)
@@ -41,19 +41,30 @@ async def _call_text(prompt: str) -> str:
 
 
 async def _call_vision(image_bytes: bytes, mime: str, prompt: str) -> str:
+    # mistralai 1.0.0 SDK types don't include ImageURLChunk, so call the API directly.
     b64 = base64.b64encode(image_bytes).decode()
     data_url = f"data:{mime};base64,{b64}"
+    payload = {
+        "model": VISION_MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": data_url},
+                ],
+            }
+        ],
+    }
     async with _semaphore:
-        resp = await _client.chat.complete_async(
-            model=VISION_MODEL,
-            messages=[
-                UserMessage(content=[
-                    TextChunk(text=prompt),
-                    ImageURLChunk(image_url=data_url),
-                ])
-            ],
-        )
-    return resp.choices[0].message.content.strip()
+        async with httpx.AsyncClient(timeout=120.0) as http:
+            resp = await http.post(
+                "https://api.mistral.ai/v1/chat/completions",
+                json=payload,
+                headers={"Authorization": f"Bearer {MISTRAL_API_KEY}"},
+            )
+            resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"].strip()
 
 
 async def _describe_image(image_bytes: bytes, mime: str = "image/jpeg") -> str:

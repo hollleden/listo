@@ -4,7 +4,7 @@ import os
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, ErrorEvent
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 
@@ -156,8 +156,19 @@ async def cmd_help(message: Message):
     )
 
 
-@dp.message(F.photo | (F.document & F.document.mime_type.startswith("image/")))
+@dp.errors()
+async def handle_error(event: ErrorEvent):
+    log.exception("Unhandled error: %s", event.exception)
+
+
+@dp.message(F.photo | F.document)
 async def handle_photo(message: Message):
+    # Ignore non-image documents
+    if message.document:
+        mime = message.document.mime_type or ""
+        if not mime.startswith("image/"):
+            return
+
     user_id = message.from_user.id
     file_id, mime = await _get_image_bytes(message)
 
@@ -227,6 +238,9 @@ async def handle_text(message: Message):
 async def main():
     database.init_db()
 
+    # Clear any active webhook so polling can receive updates
+    await bot.delete_webhook(drop_pending_updates=True)
+
     scheduler = AsyncIOScheduler()
     # Weekly digest — every Sunday at 9:00 AM
     scheduler.add_job(send_weekly_digest, "cron", day_of_week="sun", hour=9, args=[bot])
@@ -237,7 +251,7 @@ async def main():
     scheduler.start()
 
     log.info("Listo bot starting...")
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, allowed_updates=["message"])
 
 
 if __name__ == "__main__":

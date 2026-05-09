@@ -41,6 +41,7 @@ async def _call_text(prompt: str) -> str:
 
 async def _call_vision(image_bytes: bytes, mime: str, prompt: str) -> str:
     b64 = base64.b64encode(image_bytes).decode()
+    data_url = f"data:{mime};base64,{b64}"
     async with _semaphore:
         resp = await _client.chat.complete_async(
             model=VISION_MODEL,
@@ -48,11 +49,8 @@ async def _call_vision(image_bytes: bytes, mime: str, prompt: str) -> str:
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{mime};base64,{b64}"},
-                        },
                         {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": data_url},
                     ],
                 }
             ],

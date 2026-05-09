@@ -4,10 +4,10 @@ import json
 import logging
 import os
 
-from mistralai import Mistral
+from mistralai.client import MistralClient
 
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
-_client = Mistral(api_key=MISTRAL_API_KEY)
+_client = MistralClient(api_key=MISTRAL_API_KEY)
 
 VISION_MODEL = "pixtral-12b-2409"
 TEXT_MODEL = "mistral-small-latest"

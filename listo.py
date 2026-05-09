@@ -37,13 +37,15 @@ def _get_whisper_model():
 
 
 def _transcribe_video(video_bytes: bytes) -> str:
+    import imageio_ffmpeg
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
     with tempfile.TemporaryDirectory() as tmpdir:
         video_path = os.path.join(tmpdir, "video.mp4")
         audio_path = os.path.join(tmpdir, "audio.wav")
         with open(video_path, "wb") as f:
             f.write(video_bytes)
         subprocess.run(
-            ["ffmpeg", "-i", video_path, "-ac", "1", "-ar", "16000", "-y", audio_path],
+            [ffmpeg_exe, "-i", video_path, "-ac", "1", "-ar", "16000", "-y", audio_path],
             check=True, capture_output=True,
         )
         model = _get_whisper_model()
@@ -332,12 +334,12 @@ async def main():
     )
     scheduler.start()
 
-    # Warn early if ffmpeg is missing so logs surface it immediately
+    # Verify ffmpeg is available via imageio-ffmpeg
     try:
-        subprocess.run(["ffmpeg", "-version"], check=True, capture_output=True)
-        log.info("ffmpeg found")
-    except FileNotFoundError:
-        log.warning("ffmpeg not found — video transcription will be unavailable")
+        import imageio_ffmpeg
+        log.info("ffmpeg available at %s", imageio_ffmpeg.get_ffmpeg_exe())
+    except Exception:
+        log.warning("imageio-ffmpeg not available — video transcription will fail")
 
     log.info("Listo bot starting...")
     await dp.start_polling(bot, allowed_updates=["message"])

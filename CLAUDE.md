@@ -5,22 +5,24 @@ Telegram bot for AI-powered content capture and knowledge management.
 ## Stack
 - Python 3.13
 - aiogram (Telegram framework)
-- google-genai SDK (NOT google-generativeai — that one is deprecated)
+- mistralai SDK
 - APScheduler for cron jobs
-- SQLite on Railway Volume
+- SQLite (Railway Volume via DB_PATH)
 
 ## Key rules
-- Model: gemini-2.5-flash-lite
+- Vision model: pixtral-12b-2409 (image description)
+- Text model: mistral-small-latest (analysis, digests)
 - All bot-facing text must be in English
 - Never use parse_mode="Markdown" in send_message calls
-- Global asyncio.Semaphore(1) must wrap all Gemini API calls to avoid 429s
-- ALLOWED_ID check must be in every handler — bot is private
+- Global asyncio.Semaphore(1) wraps all Mistral API calls to avoid 429s
+- Bot is open to all users — no allowlist
+- ADMIN_ID user has unlimited daily saves; regular users capped at 20/day
 
 ## File structure
 - listo.py — bot handlers and scheduler
-- pipeline.py — Gemini API calls and analysis
-- database.py — SQLite
+- pipeline.py — Mistral API calls and analysis
+- database.py — SQLite (entries table with user_id column)
 - digest.py — weekly/quarterly digests
 
 ## Environment variables
-BOT_TOKEN, GEMINI_API_KEY, ALLOWED_ID, DB_PATH
+BOT_TOKEN, MISTRAL_API_KEY, ADMIN_ID, DB_PATH

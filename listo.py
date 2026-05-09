@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import os
+import subprocess
+import tempfile
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -22,6 +24,32 @@ DAILY_LIMIT = 20
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+# Whisper model — loaded once on first video
+_whisper_model = None
+
+def _get_whisper_model():
+    global _whisper_model
+    if _whisper_model is None:
+        import whisper
+        _whisper_model = whisper.load_model("tiny")
+    return _whisper_model
+
+
+def _transcribe_video(video_bytes: bytes) -> str:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        video_path = os.path.join(tmpdir, "video.mp4")
+        audio_path = os.path.join(tmpdir, "audio.wav")
+        with open(video_path, "wb") as f:
+            f.write(video_bytes)
+        subprocess.run(
+            ["ffmpeg", "-i", video_path, "-ac", "1", "-ar", "16000", "-y", audio_path],
+            check=True, capture_output=True,
+        )
+        model = _get_whisper_model()
+        result = model.transcribe(audio_path)
+        return result["text"].strip()
+
 
 # Media group accumulator
 _mg_buffer: dict[str, list[tuple[bytes, str]]] = {}   # group_id -> [(bytes, mime)]
@@ -79,7 +107,7 @@ async def _reply_result(message: Message, result: dict, media_type: str):
 
     tags_raw = result.get("tags", "")
     hashtags = " ".join(
-        f"#{t.strip().replace(' ', '_')}"
+        f"#{t.strip().replace(' ', '_').replace('-', '_').lower()}"
         for t in tags_raw.split(",")
         if t.strip()
     )
@@ -220,28 +248,30 @@ async def handle_video(message: Message):
         await message.answer(_limit_message())
         return
 
-    # Use thumbnail if available, otherwise fall back to caption-only analysis
     video = message.video or message.video_note
-    thumb = getattr(video, "thumbnail", None)
-    caption = getattr(message, "caption", "") or ""
+    file_size = getattr(video, "file_size", 0) or 0
+    if file_size > 20 * 1024 * 1024:
+        await message.answer("Video is too large (max 20MB). Please send a shorter clip.")
+        return
 
-    status = await message.answer("Analyzing your video...")
+    status = await message.answer("Processing video, this may take ~30 seconds...")
     try:
-        if thumb:
-            thumb_bytes = await _download(thumb.file_id)
-            result = await pipeline.process_images([(thumb_bytes, "image/jpeg")], caption or "Video thumbnail")
-        elif caption:
-            result = await pipeline.process_text(caption)
-        else:
+        video_bytes = await _download(video.file_id)
+        transcript = await asyncio.to_thread(_transcribe_video, video_bytes)
+
+        if not transcript:
             await status.delete()
-            await message.answer("Please add a caption to your video so I can save something meaningful.")
+            await message.answer("Could not extract speech from this video. Try sending it with a caption.")
             return
 
+        caption = getattr(message, "caption", "") or ""
+        content = f"{caption}\n\n{transcript}".strip() if caption else transcript
+        result = await pipeline.process_text(content)
         await status.delete()
         await _reply_result(message, result, "video")
     except Exception:
         await status.delete()
-        await message.answer("Something went wrong while analyzing your video. Please try again.")
+        await message.answer("Something went wrong while processing your video. Please try again.")
         log.exception("Video processing failed")
 
 

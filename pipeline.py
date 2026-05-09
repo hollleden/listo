@@ -101,9 +101,9 @@ async def _analyze(content: str) -> dict:
 
 async def process_images(image_list: list[tuple[bytes, str]], caption: str = "") -> dict:
     """image_list: list of (bytes, mime_type)"""
-    descriptions = await asyncio.gather(
-        *[_describe_image(img, mime) for img, mime in image_list]
-    )
+    descriptions = []
+    for img, mime in image_list:
+        descriptions.append(await _describe_image(img, mime))
     combined = "\n\n---\n\n".join(descriptions)
     if caption:
         combined = f"Caption: {caption}\n\n{combined}"

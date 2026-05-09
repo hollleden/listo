@@ -255,15 +255,34 @@ async def handle_video(message: Message):
         return
 
     status = await message.answer("Processing video, this may take ~30 seconds...")
+
     try:
         video_bytes = await _download(video.file_id)
+    except Exception:
+        await status.delete()
+        await message.answer("Could not download your video. Please try again.")
+        log.exception("Video download failed")
+        return
+
+    try:
         transcript = await asyncio.to_thread(_transcribe_video, video_bytes)
+    except FileNotFoundError:
+        await status.delete()
+        await message.answer("Video processing is unavailable (ffmpeg not installed on server).")
+        log.exception("ffmpeg not found")
+        return
+    except Exception:
+        await status.delete()
+        await message.answer("Could not transcribe your video. Please try again.")
+        log.exception("Video transcription failed")
+        return
 
-        if not transcript:
-            await status.delete()
-            await message.answer("Could not extract speech from this video. Try sending it with a caption.")
-            return
+    if not transcript:
+        await status.delete()
+        await message.answer("No speech detected in this video.")
+        return
 
+    try:
         caption = getattr(message, "caption", "") or ""
         content = f"{caption}\n\n{transcript}".strip() if caption else transcript
         result = await pipeline.process_text(content)
@@ -271,8 +290,8 @@ async def handle_video(message: Message):
         await _reply_result(message, result, "video")
     except Exception:
         await status.delete()
-        await message.answer("Something went wrong while processing your video. Please try again.")
-        log.exception("Video processing failed")
+        await message.answer("Transcript saved but analysis failed. Please try again.")
+        log.exception("Video analysis failed")
 
 
 @dp.message(F.text & ~F.text.startswith("/"))
@@ -312,6 +331,13 @@ async def main():
         send_quarterly_review, "cron", month="1,4,7,10", day=1, hour=9, args=[bot]
     )
     scheduler.start()
+
+    # Warn early if ffmpeg is missing so logs surface it immediately
+    try:
+        subprocess.run(["ffmpeg", "-version"], check=True, capture_output=True)
+        log.info("ffmpeg found")
+    except FileNotFoundError:
+        log.warning("ffmpeg not found — video transcription will be unavailable")
 
     log.info("Listo bot starting...")
     await dp.start_polling(bot, allowed_updates=["message"])

@@ -212,6 +212,39 @@ async def handle_photo(message: Message):
         log.exception("Single image processing failed")
 
 
+@dp.message(F.video | F.video_note)
+async def handle_video(message: Message):
+    user_id = message.from_user.id
+
+    if not await _can_save(user_id):
+        await message.answer(_limit_message())
+        return
+
+    # Use thumbnail if available, otherwise fall back to caption-only analysis
+    video = message.video or message.video_note
+    thumb = getattr(video, "thumbnail", None)
+    caption = getattr(message, "caption", "") or ""
+
+    status = await message.answer("Analyzing your video...")
+    try:
+        if thumb:
+            thumb_bytes = await _download(thumb.file_id)
+            result = await pipeline.process_images([(thumb_bytes, "image/jpeg")], caption or "Video thumbnail")
+        elif caption:
+            result = await pipeline.process_text(caption)
+        else:
+            await status.delete()
+            await message.answer("Please add a caption to your video so I can save something meaningful.")
+            return
+
+        await status.delete()
+        await _reply_result(message, result, "video")
+    except Exception:
+        await status.delete()
+        await message.answer("Something went wrong while analyzing your video. Please try again.")
+        log.exception("Video processing failed")
+
+
 @dp.message(F.text & ~F.text.startswith("/"))
 async def handle_text(message: Message):
     user_id = message.from_user.id

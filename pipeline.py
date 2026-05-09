@@ -5,6 +5,7 @@ import logging
 import os
 
 from mistralai import Mistral
+from mistralai.models import UserMessage, ImageURLChunk, TextChunk
 
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 _client = Mistral(api_key=MISTRAL_API_KEY)
@@ -46,13 +47,10 @@ async def _call_vision(image_bytes: bytes, mime: str, prompt: str) -> str:
         resp = await _client.chat.complete_async(
             model=VISION_MODEL,
             messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": data_url},
-                    ],
-                }
+                UserMessage(content=[
+                    TextChunk(text=prompt),
+                    ImageURLChunk(image_url=data_url),
+                ])
             ],
         )
     return resp.choices[0].message.content.strip()

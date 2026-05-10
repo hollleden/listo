@@ -19,10 +19,11 @@ openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 VISION_MODEL = "pixtral-12b-2409"
 TEXT_MODEL = "mistral-small-latest"
 
-# Serialize all Mistral calls to avoid rate-limit errors
 _semaphore = asyncio.Semaphore(1)
 
 log = logging.getLogger(__name__)
+
+DIVIDER = "━━━━━━━━━━━━━━━━"
 
 _ANALYSIS_PROMPT = """Analyze the following content and return ONLY a valid JSON object.
 
@@ -46,32 +47,30 @@ Return this exact structure:
     "knitting": [{{"pattern": "...", "creator": "..."}}],
     "beauty_skincare": [{{"product": "...", "brand": "..."}}],
     "websites": [{{"name": "...", "url": "..."}}],
-    "ai_terms": [{{"term": "..."}}],
+    "ai_terms": [{{"term": "...", "explanation": "one-line explanation"}}],
     "social_handles": [{{"handle": "@username"}}],
     "other": [{{"entity": "..."}}]
   }},
   "summary": {{
     "what": "one clear sentence: what question does this content answer",
-    "details": "key specifics: prices, steps, warnings, measurements"
+    "details": "key specifics: prices, steps, warnings, measurements, location"
   }},
   "tags": {{
     "category": "#Tech",
-    "cta": ["#tutorial"],
-    "extra": ["#python", "#ai_tools"]
+    "extra": ["#python", "#tutorial", "#must_try", "#local"]
   }},
   "fact_check": "any verifiable claims or concerns, or No concerns",
   "folder": "single category label"
 }}
 
 Rules:
-- transcription: only include keys present in the content labels. For images use image_1, image_2. For audio use video. For video frames use the integer second as the key (3, 6, 9). Extract ONLY literally visible/spoken text — do not paraphrase.
+- transcription: only include keys present in the content labels. Images use image_1, image_2. Audio uses video. Video frames use the integer second as the key (3, 6, 9). Extract ONLY literally visible/spoken text — do not paraphrase.
 - entities: include ONLY entities explicitly present in the content. Omit any category with no entries (no empty arrays).
-- other: maximum 3 items.
+- other: maximum 3 items only.
 - Group all extracted entities strictly by category. Each category appears exactly once.
 - social_handles: skip any handle that belongs to a bot (contains "bot" in the name).
 - tags.category: EXACTLY ONE from: #Travel #Books #AI #Fashion #Movies #Knitting #Food #Tech #LifeHack #Other
-- tags.cta: zero or more from: #must_try #paid #free #warning #timely #local #tutorial #list #review
-- tags.extra: lowercase hashtags, underscores not hyphens
+- tags.extra: all relevant lowercase hashtags with underscores not hyphens — include both descriptive tags and action tags like #must_try #paid #free #warning #timely #local #tutorial #list #review
 - Return valid JSON only, no markdown fences."""
 
 
@@ -137,7 +136,7 @@ def _parse_analysis(raw: str) -> dict:
             "transcription": {},
             "entities": {},
             "summary": {"what": raw[:200], "details": ""},
-            "tags": {"category": "#Other", "cta": [], "extra": []},
+            "tags": {"category": "#Other", "extra": []},
             "fact_check": "Could not analyze",
             "folder": "Other",
         }
@@ -217,7 +216,7 @@ def _a(label: str, url: str) -> str:
 
 
 def _fmt_folder(tags) -> str:
-    """Returns the category tag only (e.g. '#Travel')."""
+    """Returns the single category tag, e.g. '#Travel'."""
     if not isinstance(tags, dict):
         return "#Other"
     cat = (tags.get("category") or "").strip()
@@ -227,14 +226,10 @@ def _fmt_folder(tags) -> str:
 
 
 def _fmt_tags(tags) -> str:
-    """Returns CTA + extra tags only — category is excluded."""
-    if isinstance(tags, str):
-        return tags
+    """Returns space-joined extra tags only (no category)."""
+    if not isinstance(tags, dict):
+        return ""
     parts = []
-    for tag in tags.get("cta") or []:
-        t = tag.strip()
-        if t:
-            parts.append(t if t.startswith("#") else f"#{t}")
     for tag in tags.get("extra") or []:
         t = tag.strip().replace("-", "_").lower()
         if t:
@@ -256,10 +251,14 @@ def _transcription_sort_key(k: str) -> tuple:
         return (3, 0, k)
 
 
-def format_result(result: dict) -> str:
-    lines = []
+def _section(header: str, body_lines: list[str]) -> str:
+    return "\n".join([DIVIDER, header, DIVIDER] + body_lines)
 
-    # --- 1. Summary (first) ---
+
+def format_result(result: dict) -> str:
+    sections = []
+
+    # --- 1. SUMMARY ---
     summary = result.get("summary") or {}
     if isinstance(summary, dict):
         what = html.escape((summary.get("what") or "").strip())
@@ -267,165 +266,181 @@ def format_result(result: dict) -> str:
     else:
         what, details = html.escape(str(summary).strip()), ""
     if what or details:
-        lines.append("📋 Summary")
+        body = []
         if what:
-            lines.append(f"<b>What:</b> {what}")
+            body.append(f"▪ {what}")
         if details:
-            lines.append(f"<b>Details:</b> {details}")
-        lines.append("")
+            body.append(f"▪ {details}")
+        sections.append(_section("📋 SUMMARY", body))
 
-    # --- 2. Transcription (second) ---
+    # --- 2. TRANSCRIPTION ---
     transcription = result.get("transcription") or {}
-    if transcription:
-        lines.append("📝 Transcription")
-        for key in sorted(transcription.keys(), key=_transcription_sort_key):
-            text = (transcription[key] or "").strip()
-            if not text:
-                continue
-            if key.startswith("image_"):
-                n = key.split("_", 1)[1]
-                lines.append(f"&gt; -- Image {n} --")
-                for t_line in text.split("\n"):
-                    if t_line.strip():
-                        lines.append(f"&gt; {html.escape(t_line.strip())}")
-            elif key == "video":
-                for t_line in text.split("\n"):
-                    if t_line.strip():
-                        lines.append(f"&gt; {html.escape(t_line.strip())}")
-            else:
-                # Numeric timestamp key (integer seconds)
-                try:
-                    secs = int(key)
-                    timestamp = f"{secs // 60}:{secs % 60:02d}"
-                    frame_text = " ".join(l.strip() for l in text.split("\n") if l.strip())
-                    lines.append(f"&gt; {timestamp} -- {html.escape(frame_text)}")
-                except ValueError:
-                    lines.append(f"&gt; {html.escape(text)}")
-        lines.append("")
+    t_body = []
+    for key in sorted(transcription.keys(), key=_transcription_sort_key):
+        text = (transcription[key] or "").strip()
+        if not text:
+            continue
+        if key.startswith("image_"):
+            n = key.split("_", 1)[1]
+            t_body.append(f"┆ -- Image {n} --")
+            for line in text.split("\n"):
+                if line.strip():
+                    t_body.append(f"┆ {html.escape(line.strip())}")
+        elif key == "video":
+            for line in text.split("\n"):
+                if line.strip():
+                    t_body.append(f"┆ {html.escape(line.strip())}")
+        else:
+            try:
+                secs = int(key)
+                timestamp = f"{secs // 60}:{secs % 60:02d}"
+                frame_text = " ".join(ln.strip() for ln in text.split("\n") if ln.strip())
+                t_body.append(f"┆ {timestamp} -- {html.escape(frame_text)}")
+            except ValueError:
+                t_body.append(f"┆ {html.escape(text)}")
+    if t_body:
+        sections.append(_section("📝 TRANSCRIPTION", t_body))
 
-    # --- 3. Extracted entities (third) ---
+    # --- 3. EXTRACTED ---
     entities = result.get("entities") or {}
-    entity_lines = []
+    cat_blocks: list[str] = []
+
+    def _cat(header: str, items: list[str]) -> None:
+        if items:
+            cat_blocks.append(f"▪ {header}\n" + "\n".join(f"  {i}" for i in items))
 
     places = entities.get("places") or []
     if places:
-        entity_lines.append("📍 Places")
+        rows = []
         for p in places:
             name = p.get("name", "")
             typ = p.get("type", "")
             ctx = f" – {html.escape(typ)}" if typ else ""
             maps = _a("Maps", f"https://www.google.com/maps/search/{_q(name)}")
             google = _a("Google", f"https://www.google.com/search?q={_q(name)}")
-            entity_lines.append(f"• <i>{html.escape(name)}</i>{ctx} → {maps} | {google}")
+            rows.append(f"• <i>{html.escape(name)}</i>{ctx} → {maps} | {google}")
+        _cat("PLACES", rows)
 
     books = entities.get("books") or []
     if books:
-        entity_lines.append("📚 Books")
+        rows = []
         for b in books:
             title = b.get("title", "")
             author = b.get("author", "")
             raw_q = f"{title} by {author}" if author else title
-            ctx = f" – by {html.escape(author)}" if author else ""
+            ctx = f" by {html.escape(author)}" if author else ""
             goodreads = _a("Goodreads", f"https://www.goodreads.com/search?q={_q(raw_q)}")
             google = _a("Google", f"https://www.google.com/search?q={_q(raw_q)}")
-            entity_lines.append(f"• <i>{html.escape(title)}</i>{ctx} → {goodreads} | {google}")
+            rows.append(f"• <i>{html.escape(title)}</i>{ctx} → {goodreads} | {google}")
+        _cat("BOOKS", rows)
 
     movies_tv = entities.get("movies_tv") or []
     if movies_tv:
-        entity_lines.append("🎬 Movies & TV")
+        rows = []
         for m in movies_tv:
             title = m.get("title", "")
             imdb = _a("IMDb", f"https://www.imdb.com/find?q={_q(title)}")
             google = _a("Google", f"https://www.google.com/search?q={_q(title)}")
-            entity_lines.append(f"• <i>{html.escape(title)}</i> → {imdb} | {google}")
+            rows.append(f"• <i>{html.escape(title)}</i> → {imdb} | {google}")
+        _cat("MOVIES & TV", rows)
 
     fashion = entities.get("fashion") or []
     if fashion:
-        entity_lines.append("🧥 Fashion")
+        rows = []
         for f in fashion:
             brand = f.get("brand", "")
             google = _a("Google", f"https://www.google.com/search?q={_q(brand)}")
-            entity_lines.append(f"• <i>{html.escape(brand)}</i> → {google}")
+            rows.append(f"• <i>{html.escape(brand)}</i> → {google}")
+        _cat("FASHION", rows)
 
     knitting = entities.get("knitting") or []
     if knitting:
-        entity_lines.append("🧶 Knitting")
+        rows = []
         for k in knitting:
             pattern = k.get("pattern", "")
             creator = k.get("creator", "")
-            ctx = f" – by {html.escape(creator)}" if creator else ""
+            ctx = f" by {html.escape(creator)}" if creator else ""
             ravelry = _a("Ravelry", f"https://www.ravelry.com/search#query={_q(pattern)}")
             google = _a("Google", f"https://www.google.com/search?q={_q(pattern)}")
-            entity_lines.append(f"• <i>{html.escape(pattern)}</i>{ctx} → {ravelry} | {google}")
+            rows.append(f"• <i>{html.escape(pattern)}</i>{ctx} → {ravelry} | {google}")
+        _cat("KNITTING", rows)
 
     beauty = entities.get("beauty_skincare") or []
     if beauty:
-        entity_lines.append("💄 Beauty & Skincare")
+        rows = []
         for b in beauty:
             product = b.get("product", "")
             brand = b.get("brand", "")
-            ctx = f" – by {html.escape(brand)}" if brand else ""
+            ctx = f" by {html.escape(brand)}" if brand else ""
             raw_q = f"{product} by {brand}" if brand else product
             google = _a("Google", f"https://www.google.com/search?q={_q(raw_q)}")
-            entity_lines.append(f"• <i>{html.escape(product)}</i>{ctx} → {google}")
+            rows.append(f"• <i>{html.escape(product)}</i>{ctx} → {google}")
+        _cat("BEAUTY & SKINCARE", rows)
 
     websites = entities.get("websites") or []
     if websites:
-        entity_lines.append("🌐 Websites")
+        rows = []
         for w in websites:
             name = w.get("name", "")
             url = w.get("url", "")
             if url:
-                entity_lines.append(f"• <i>{html.escape(name)}</i> → {_a(url, url)}")
+                rows.append(f"• <i>{html.escape(name)}</i> → {_a(url, url)}")
             else:
-                entity_lines.append(f"• <i>{html.escape(name)}</i>")
+                rows.append(f"• <i>{html.escape(name)}</i>")
+        _cat("WEBSITES", rows)
 
     ai_terms = entities.get("ai_terms") or []
     if ai_terms:
-        entity_lines.append("🤖 AI terms & tips")
+        rows = []
         for a in ai_terms:
             term = a.get("term", "")
+            explanation = a.get("explanation", "")
+            ctx = f" – {html.escape(explanation)}" if explanation else ""
             google = _a("Google", f"https://www.google.com/search?q={_q(term)}")
-            entity_lines.append(f"• <i>{html.escape(term)}</i> → {google}")
+            rows.append(f"• <i>{html.escape(term)}</i>{ctx} → {google}")
+        _cat("AI TERMS", rows)
 
     social = [s for s in (entities.get("social_handles") or [])
               if "bot" not in (s.get("handle") or "").lower()]
     if social:
-        entity_lines.append("👤 Social handles")
+        rows = []
         for s in social:
             h = s.get("handle", "")
             if h and not h.startswith("@"):
                 h = f"@{h}"
             google = _a("Google", f"https://www.google.com/search?q={_q(h)}")
-            entity_lines.append(f"• <i>{html.escape(h)}</i> → {google}")
+            rows.append(f"• <i>{html.escape(h)}</i> → {google}")
+        _cat("SOCIAL HANDLES", rows)
 
-    other = (entities.get("other") or [])[:3]  # max 3 items
+    other = (entities.get("other") or [])[:3]
     if other:
-        entity_lines.append("📦 Other")
+        rows = []
         for o in other:
             entity = o.get("entity", "")
             google = _a("Google", f"https://www.google.com/search?q={_q(entity)}")
-            entity_lines.append(f"• <i>{html.escape(entity)}</i> → {google}")
+            rows.append(f"• <i>{html.escape(entity)}</i> → {google}")
+        _cat("OTHER", rows)
 
-    if entity_lines:
-        lines.append("🔍 Extracted")
-        lines.extend(entity_lines)
-        lines.append("")
+    if cat_blocks:
+        sections.append(_section("🔍 EXTRACTED", ["\n\n".join(cat_blocks)]))
 
-    # --- 4. Folder (fourth) ---
+    # --- 4. FOLDER & TAGS ---
     tags = result.get("tags") or {}
     folder_str = _fmt_folder(tags)
-    lines.append("📁 Folder")
-    lines.append(html.escape(folder_str))
-    lines.append("")
+    extra_tags = [
+        t.strip().replace("-", "_").lower()
+        for t in (tags.get("extra") or [])
+        if t.strip()
+    ]
+    extra_tags = [t if t.startswith("#") else f"#{t}" for t in extra_tags]
 
-    # --- 5. Tags (fifth) ---
-    tag_str = _fmt_tags(tags)
-    if tag_str:
-        lines.append("🏷️ Tags")
-        lines.append(html.escape(tag_str))
+    ft_body = [html.escape(folder_str)]
+    for i, tag in enumerate(extra_tags):
+        connector = "└─" if i == len(extra_tags) - 1 else "├─"
+        ft_body.append(f"{connector} {html.escape(tag)}")
+    sections.append(_section("📁 FOLDER & TAGS", ft_body))
 
-    return "\n".join(lines).strip()
+    return "\n\n".join(sections).strip()
 
 
 def extract_db_fields(result: dict) -> dict:
@@ -437,7 +452,7 @@ def extract_db_fields(result: dict) -> dict:
 
     tags = result.get("tags") or {}
     folder = _fmt_folder(tags).lstrip("#")
-    tags_str = _fmt_tags(tags)  # CTA + extra only, no category
+    tags_str = _fmt_tags(tags)  # extra only, no category
 
     return {
         "summary": summary_str,
@@ -467,13 +482,12 @@ async def process_images(image_list: list[tuple[bytes, str]], caption: str = "")
 
 async def process_text(text: str) -> dict:
     analysis = await _analyze(text)
-    analysis.pop("transcription", None)  # don't echo the user's own text back
+    analysis.pop("transcription", None)
     analysis["raw_content"] = text
     return analysis
 
 
 async def process_video(video_bytes: bytes, duration: int = 0) -> dict:
-    # Run Whisper transcription (async) and frame extraction (blocking thread) in parallel
     transcript_task = _transcribe_audio(video_bytes)
     frames_task = asyncio.to_thread(_extract_frames_sync, video_bytes, duration)
 
@@ -488,11 +502,9 @@ async def process_video(video_bytes: bytes, duration: int = 0) -> dict:
         log.warning("Frame extraction failed: %s", frames)
         frames = []
 
-    # Build labeled content — use integer seconds as frame keys
     content_parts = []
     if transcript:
         content_parts.append(f"-- video --\n{transcript}")
-
     for frame_bytes, ts_sec in frames:
         desc = await _describe_image(frame_bytes, "image/jpeg")
         content_parts.append(f"-- {ts_sec} --\n{desc}")

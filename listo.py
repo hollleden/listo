@@ -52,6 +52,35 @@ def _limit_message() -> str:
     )
 
 
+async def _safe_delete(msg) -> None:
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+
+async def _send_long(message: Message, text: str) -> None:
+    """Send text, splitting into chunks if it exceeds Telegram's 4096-char limit."""
+    MAX = 4000
+    if len(text) <= MAX:
+        await message.answer(text, parse_mode=HTML)
+        return
+    lines = text.split("\n")
+    chunk_lines: list[str] = []
+    chunk_len = 0
+    for line in lines:
+        line_cost = len(line) + 1
+        if chunk_len + line_cost > MAX and chunk_lines:
+            await message.answer("\n".join(chunk_lines), parse_mode=HTML)
+            chunk_lines = [line]
+            chunk_len = line_cost
+        else:
+            chunk_lines.append(line)
+            chunk_len += line_cost
+    if chunk_lines:
+        await message.answer("\n".join(chunk_lines), parse_mode=HTML)
+
+
 async def _get_image_bytes(message: Message) -> tuple[str, str]:
     """Returns (file_id, mime_type)."""
     if message.photo:
@@ -79,7 +108,7 @@ async def _reply_result(message: Message, result: dict, media_type: str):
         fact_check=fields["fact_check"],
         enrichment=fields["enrichment"],
     )
-    await message.answer(pipeline.format_result(result), parse_mode=HTML)
+    await _send_long(message, pipeline.format_result(result))
 
 
 # ---------------------------------------------------------------------------
@@ -107,10 +136,10 @@ async def _flush_media_group(group_id: str):
     status = await message.answer("Analyzing your images...", parse_mode=HTML)
     try:
         result = await pipeline.process_images(images, caption)
-        await status.delete()
+        await _safe_delete(status)
         await _reply_result(message, result, "image_group")
     except Exception:
-        await status.delete()
+        await _safe_delete(status)
         await message.answer("Something went wrong while analyzing your images. Please try again.", parse_mode=HTML)
         log.exception("Media group processing failed")
 
@@ -193,10 +222,10 @@ async def handle_photo(message: Message):
     status = await message.answer("Analyzing your image...", parse_mode=HTML)
     try:
         result = await pipeline.process_images([(image_bytes, mime)], message.caption or "")
-        await status.delete()
+        await _safe_delete(status)
         await _reply_result(message, result, "image")
     except Exception:
-        await status.delete()
+        await _safe_delete(status)
         await message.answer("Something went wrong while analyzing your image. Please try again.", parse_mode=HTML)
         log.exception("Single image processing failed")
 
@@ -220,10 +249,10 @@ async def handle_video(message: Message):
         video_bytes = await _download(video.file_id)
         caption = message.caption or ""
         result = await pipeline.process_video(video_bytes, caption)
-        await status.delete()
+        await _safe_delete(status)
         await _reply_result(message, result, "video")
     except Exception:
-        await status.delete()
+        await _safe_delete(status)
         await message.answer("Something went wrong while processing your video. Please try again.", parse_mode=HTML)
         log.exception("Video processing failed")
 
@@ -239,10 +268,10 @@ async def handle_text(message: Message):
     status = await message.answer("Analyzing your text...", parse_mode=HTML)
     try:
         result = await pipeline.process_text(message.text)
-        await status.delete()
+        await _safe_delete(status)
         await _reply_result(message, result, "text")
     except Exception:
-        await status.delete()
+        await _safe_delete(status)
         await message.answer("Something went wrong while analyzing your text. Please try again.", parse_mode=HTML)
         log.exception("Text processing failed")
 

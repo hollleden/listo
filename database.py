@@ -74,3 +74,40 @@ def get_active_users() -> list[int]:
     with _conn() as conn:
         rows = conn.execute("SELECT DISTINCT user_id FROM entries").fetchall()
     return [row[0] for row in rows]
+
+
+def get_recent_entries(user_id: int, limit: int = 10) -> list[dict]:
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT id, created_at, folder, summary, media_type
+               FROM entries WHERE user_id = ?
+               ORDER BY created_at DESC, id DESC LIMIT ?""",
+            (user_id, limit),
+        ).fetchall()
+    keys = ["id", "created_at", "folder", "summary", "media_type"]
+    return [dict(zip(keys, row)) for row in rows]
+
+
+def search_entries(user_id: int, query: str, limit: int = 5) -> list[dict]:
+    pattern = f"%{query}%"
+    with _conn() as conn:
+        rows = conn.execute(
+            """SELECT id, created_at, folder, summary, media_type
+               FROM entries
+               WHERE user_id = ?
+                 AND (summary LIKE ? OR tags LIKE ? OR raw_content LIKE ?)
+               ORDER BY created_at DESC, id DESC LIMIT ?""",
+            (user_id, pattern, pattern, pattern, limit),
+        ).fetchall()
+    keys = ["id", "created_at", "folder", "summary", "media_type"]
+    return [dict(zip(keys, row)) for row in rows]
+
+
+def delete_entry(entry_id: int, user_id: int) -> bool:
+    with _conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM entries WHERE id = ? AND user_id = ?",
+            (entry_id, user_id),
+        )
+        conn.commit()
+    return cur.rowcount > 0

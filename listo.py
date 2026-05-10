@@ -1,4 +1,5 @@
 import asyncio
+import html
 import logging
 import os
 
@@ -139,7 +140,6 @@ async def _flush_media_group(group_id: str):
 
     user_id = meta["user_id"]
     message: Message = meta["message"]
-    caption: str = meta.get("caption", "")
 
     if not await _can_save(user_id):
         await message.answer(_limit_message(), parse_mode=HTML)
@@ -147,7 +147,7 @@ async def _flush_media_group(group_id: str):
 
     status = await message.answer("Analyzing your images...", parse_mode=HTML)
     try:
-        result = await pipeline.process_images(images, caption)
+        result = await pipeline.process_images(images, "")
         await _safe_delete(status)
         await _reply_result(message, result, "image_group")
     except Exception:
@@ -186,6 +186,52 @@ async def cmd_help(message: Message):
     )
 
 
+FOLDER_EMOJI = {
+    "Travel": "✈️", "Books": "📚", "AI": "🤖", "Fashion": "👗",
+    "Movies": "🎬", "Knitting": "🧶", "Food": "🍽️", "Tech": "💻",
+    "LifeHack": "💡", "Other": "📌",
+}
+
+
+@dp.message(Command("list"))
+async def cmd_list(message: Message):
+    user_id = message.from_user.id
+    entries = database.get_recent_entries(user_id, limit=10)
+    if not entries:
+        await message.answer("You have no saved items yet.", parse_mode=HTML)
+        return
+    lines = ["<b>Your last 10 saves:</b>"]
+    for i, e in enumerate(entries, 1):
+        emoji = FOLDER_EMOJI.get(e["folder"], "📌")
+        snippet = (e["summary"] or "")[:60].strip()
+        if len(e["summary"] or "") > 60:
+            snippet += "…"
+        lines.append(f"{i}. {emoji} <b>{e['folder']}</b> — {snippet} <i>({e['created_at']})</i>")
+    await message.answer("\n".join(lines), parse_mode=HTML)
+
+
+@dp.message(Command("search"))
+async def cmd_search(message: Message):
+    user_id = message.from_user.id
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await message.answer("Usage: /search &lt;keyword&gt;", parse_mode=HTML)
+        return
+    query = parts[1].strip()
+    entries = database.search_entries(user_id, query, limit=5)
+    if not entries:
+        await message.answer(f"No results for <b>{html.escape(query)}</b>.", parse_mode=HTML)
+        return
+    lines = [f"<b>Results for \"{html.escape(query)}\":</b>"]
+    for i, e in enumerate(entries, 1):
+        emoji = FOLDER_EMOJI.get(e["folder"], "📌")
+        snippet = (e["summary"] or "")[:80].strip()
+        if len(e["summary"] or "") > 80:
+            snippet += "…"
+        lines.append(f"{i}. {emoji} <b>{e['folder']}</b> — {snippet} <i>({e['created_at']})</i>")
+    await message.answer("\n".join(lines), parse_mode=HTML)
+
+
 @dp.errors()
 async def handle_error(event: ErrorEvent):
     log.exception("Unhandled error: %s", event.exception)
@@ -193,8 +239,6 @@ async def handle_error(event: ErrorEvent):
 
 @dp.message(F.photo | F.document)
 async def handle_photo(message: Message):
-    if _should_ignore(message):
-        return
     # Ignore non-image documents
     if message.document:
         mime = message.document.mime_type or ""
@@ -202,8 +246,13 @@ async def handle_photo(message: Message):
             return
 
     user_id = message.from_user.id
-    file_id, mime = await _get_image_bytes(message)
 
+    # Check limit before downloading anything
+    if not message.media_group_id and not await _can_save(user_id):
+        await message.answer(_limit_message(), parse_mode=HTML)
+        return
+
+    file_id, mime = await _get_image_bytes(message)
     try:
         image_bytes = await _download(file_id)
     except Exception:
@@ -215,11 +264,7 @@ async def handle_photo(message: Message):
         gid = message.media_group_id
         if gid not in _mg_buffer:
             _mg_buffer[gid] = []
-            _mg_meta[gid] = {
-                "user_id": user_id,
-                "message": message,
-                "caption": message.caption or "",
-            }
+            _mg_meta[gid] = {"user_id": user_id, "message": message}
         _mg_buffer[gid].append((image_bytes, mime))
 
         existing = _mg_tasks.get(gid)
@@ -228,14 +273,9 @@ async def handle_photo(message: Message):
         _mg_tasks[gid] = asyncio.create_task(_flush_media_group(gid))
         return
 
-    # Single image
-    if not await _can_save(user_id):
-        await message.answer(_limit_message(), parse_mode=HTML)
-        return
-
     status = await message.answer("Analyzing your image...", parse_mode=HTML)
     try:
-        result = await pipeline.process_images([(image_bytes, mime)], message.caption or "")
+        result = await pipeline.process_images([(image_bytes, mime)], "")
         await _safe_delete(status)
         await _reply_result(message, result, "image")
     except Exception:
@@ -246,9 +286,6 @@ async def handle_photo(message: Message):
 
 @dp.message(F.video | F.video_note)
 async def handle_video(message: Message):
-    if _should_ignore(message):
-        return
-
     user_id = message.from_user.id
     if not await _can_save(user_id):
         await message.answer(_limit_message(), parse_mode=HTML)

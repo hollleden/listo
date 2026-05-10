@@ -60,6 +60,7 @@ Return this exact structure:
     "extra": ["#python", "#tutorial", "#must_try", "#local"]
   }},
   "fact_check": "any verifiable claims or concerns, or No concerns",
+  "title": "short 3-6 word title describing the specific content",
   "folder": "single category label"
 }}
 
@@ -91,6 +92,11 @@ TAGS — from two sources:
 - Always generate at least 2-3 tags. Never leave tags.extra empty.
 - tags.category: EXACTLY ONE from: #Travel #Books #AI #Fashion #Movies #Knitting #Food #Tech #LifeHack #Other
 - tags.extra: lowercase hashtags with underscores not hyphens.
+
+TITLE:
+- Generate a short specific 3-6 word title capturing what THIS content is about.
+- Not generic. Not the category name. The actual subject.
+- Examples: "The Private Eye graphic novel", "Romantic spots in Barcelona", "Korean retinol skincare routine".
 
 SOCIAL HANDLES:
 - Skip any handle containing "bot" (case insensitive).
@@ -278,12 +284,30 @@ def _transcription_sort_key(k: str) -> tuple:
         return (3, 0, k)
 
 
+CATEGORY_EMOJI = {
+    "#Travel": "🌍", "#Books": "📚", "#AI": "🤖", "#Fashion": "🧥",
+    "#Movies": "🎬", "#Knitting": "🧶", "#Food": "🍽️", "#Tech": "💻",
+    "#LifeHack": "💡", "#Other": "📌",
+}
+
+
 def _section(header: str, body_lines: list[str]) -> str:
-    return "\n".join([DIVIDER, header, DIVIDER] + body_lines)
+    return "\n".join([DIVIDER, header] + body_lines)
 
 
 def format_result(result: dict) -> str:
     sections = []
+
+    # --- Bold header ---
+    tags = result.get("tags") or {}
+    folder_str = _fmt_folder(tags)
+    emoji = CATEGORY_EMOJI.get(folder_str, "📌")
+    category_label = folder_str.lstrip("#").upper()
+    title = html.escape((result.get("title") or "").strip())
+    if title:
+        sections.append(f"<b>{emoji} {category_label} · {title}</b>")
+    else:
+        sections.append(f"<b>{emoji} {category_label}</b>")
 
     # --- 1. SUMMARY ---
     summary = result.get("summary") or {}
@@ -452,8 +476,6 @@ def format_result(result: dict) -> str:
         sections.append(_section("🔍 EXTRACTED", ["\n\n".join(cat_blocks)]))
 
     # --- 4. FOLDER & TAGS ---
-    tags = result.get("tags") or {}
-    folder_str = _fmt_folder(tags)
     extra_tags = [
         t.strip().replace("-", "_").lower()
         for t in (tags.get("extra") or [])
@@ -487,6 +509,7 @@ def extract_db_fields(result: dict) -> dict:
         "folder": folder,
         "fact_check": result.get("fact_check", ""),
         "enrichment": json.dumps(result.get("entities") or {}),
+        "title": result.get("title", ""),
     }
 
 

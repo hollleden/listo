@@ -22,9 +22,14 @@ def init_db():
                 tags        TEXT,
                 folder      TEXT,
                 fact_check  TEXT,
-                enrichment  TEXT
+                enrichment  TEXT,
+                title       TEXT
             )
         """)
+        try:
+            conn.execute("ALTER TABLE entries ADD COLUMN title TEXT")
+        except Exception:
+            pass  # column already exists
         conn.commit()
 
 
@@ -37,13 +42,14 @@ def save_entry(
     folder: str,
     fact_check: str,
     enrichment: str,
+    title: str = "",
 ):
     with _conn() as conn:
         conn.execute(
             """INSERT INTO entries
-               (user_id, created_at, media_type, raw_content, summary, tags, folder, fact_check, enrichment)
-               VALUES (?, date('now'), ?, ?, ?, ?, ?, ?, ?)""",
-            (user_id, media_type, raw_content, summary, tags, folder, fact_check, enrichment),
+               (user_id, created_at, media_type, raw_content, summary, tags, folder, fact_check, enrichment, title)
+               VALUES (?, date('now'), ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, media_type, raw_content, summary, tags, folder, fact_check, enrichment, title),
         )
         conn.commit()
 

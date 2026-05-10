@@ -120,6 +120,7 @@ async def _reply_result(message: Message, result: dict, media_type: str):
         folder=fields["folder"],
         fact_check=fields["fact_check"],
         enrichment=fields["enrichment"],
+        title=fields.get("title", ""),
     )
     await _send_long(message, pipeline.format_result(result))
 

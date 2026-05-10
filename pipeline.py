@@ -35,14 +35,15 @@ Return this exact structure:
     "image_1": "all raw visible text from image 1 exactly as it appears, line by line",
     "image_2": "all raw visible text from image 2, line by line",
     "video": "full audio transcript",
-    "frame_003": "all on-screen text visible in the frame at 0:03",
-    "frame_006": "all on-screen text visible in the frame at 0:06"
+    "3": "all on-screen text visible at second 3",
+    "6": "all on-screen text visible at second 6"
   }},
   "entities": {{
     "places": [{{"name": "...", "type": "restaurant/city/landmark/etc"}}],
     "books": [{{"title": "...", "author": "..."}}],
     "movies_tv": [{{"title": "..."}}],
     "fashion": [{{"brand": "..."}}],
+    "knitting": [{{"pattern": "...", "creator": "..."}}],
     "beauty_skincare": [{{"product": "...", "brand": "..."}}],
     "websites": [{{"name": "...", "url": "..."}}],
     "ai_terms": [{{"term": "..."}}],
@@ -63,9 +64,10 @@ Return this exact structure:
 }}
 
 Rules:
-- transcription: only include keys present in the content labels (image_1, image_2, video for audio, frame_NNN for video frames). Extract ONLY literally visible/spoken text — do not paraphrase.
+- transcription: only include keys present in the content labels. For images use image_1, image_2. For audio use video. For video frames use the integer second as the key (3, 6, 9). Extract ONLY literally visible/spoken text — do not paraphrase.
 - entities: include ONLY entities explicitly present in the content. Omit any category with no entries (no empty arrays).
-- Group all extracted entities strictly by category. Each category appears exactly once. All items for a category must be listed consecutively before moving to the next category.
+- other: maximum 3 items.
+- Group all extracted entities strictly by category. Each category appears exactly once.
 - social_handles: skip any handle that belongs to a bot (contains "bot" in the name).
 - tags.category: EXACTLY ONE from: #Travel #Books #AI #Fashion #Movies #Knitting #Food #Tech #LifeHack #Other
 - tags.cta: zero or more from: #must_try #paid #free #warning #timely #local #tutorial #list #review
@@ -214,13 +216,21 @@ def _a(label: str, url: str) -> str:
     return f'<a href="{url}">{label}</a>'
 
 
+def _fmt_folder(tags) -> str:
+    """Returns the category tag only (e.g. '#Travel')."""
+    if not isinstance(tags, dict):
+        return "#Other"
+    cat = (tags.get("category") or "").strip()
+    if not cat:
+        return "#Other"
+    return cat if cat.startswith("#") else f"#{cat}"
+
+
 def _fmt_tags(tags) -> str:
+    """Returns CTA + extra tags only — category is excluded."""
     if isinstance(tags, str):
         return tags
     parts = []
-    cat = (tags.get("category") or "").strip()
-    if cat:
-        parts.append(cat if cat.startswith("#") else f"#{cat}")
     for tag in tags.get("cta") or []:
         t = tag.strip()
         if t:
@@ -232,132 +242,24 @@ def _fmt_tags(tags) -> str:
     return " ".join(parts)
 
 
-def _transcription_label(key: str) -> str:
-    if key.startswith("image_"):
-        return f"Image {key.split('_', 1)[1]}"
-    if key == "video":
-        return "Audio transcript"
-    if key.startswith("frame_"):
+def _transcription_sort_key(k: str) -> tuple:
+    if k.startswith("image_"):
         try:
-            secs = int(key.split("_", 1)[1])
-            return f"Video at {secs // 60}:{secs % 60:02d}"
+            return (0, int(k.split("_", 1)[1]), "")
         except (ValueError, IndexError):
-            pass
-    return key.replace("_", " ").title()
+            return (0, 999, k)
+    if k == "video":
+        return (1, 0, "")
+    try:
+        return (2, int(k), "")
+    except ValueError:
+        return (3, 0, k)
 
 
 def format_result(result: dict) -> str:
     lines = []
 
-    # --- 1. Exact transcription (always first) ---
-    transcription = result.get("transcription") or {}
-    if transcription:
-        lines.append("📝 Exact transcription")
-        for key in sorted(transcription.keys()):
-            text = (transcription[key] or "").strip()
-            if not text:
-                continue
-            lines.append(f"-- {_transcription_label(key)} --")
-            lines.append(html.escape(text))
-        lines.append("")
-
-    # --- 2. Extracted entities ---
-    entities = result.get("entities") or {}
-    entity_lines = []
-
-    places = entities.get("places") or []
-    if places:
-        entity_lines.append("📍 Places")
-        for p in places:
-            name = p.get("name", "")
-            typ = p.get("type", "")
-            label = html.escape(f"{name} ({typ})" if typ else name)
-            maps = _a("Maps", f"https://www.google.com/maps/search/{_q(name)}")
-            google = _a("Google", f"https://www.google.com/search?q={_q(name)}")
-            entity_lines.append(f"• {label} → {maps} | {google}")
-
-    books = entities.get("books") or []
-    if books:
-        entity_lines.append("📚 Books")
-        for b in books:
-            title = b.get("title", "")
-            author = b.get("author", "")
-            raw_label = f"{title} by {author}" if author else title
-            label = html.escape(raw_label)
-            goodreads = _a("Goodreads", f"https://www.goodreads.com/search?q={_q(raw_label)}")
-            google = _a("Google", f"https://www.google.com/search?q={_q(raw_label)}")
-            entity_lines.append(f"• {label} → {goodreads} | {google}")
-
-    movies_tv = entities.get("movies_tv") or []
-    if movies_tv:
-        entity_lines.append("🎬 Movies & TV")
-        for m in movies_tv:
-            title = m.get("title", "")
-            label = html.escape(title)
-            imdb = _a("IMDb", f"https://www.imdb.com/find?q={_q(title)}")
-            google = _a("Google", f"https://www.google.com/search?q={_q(title)}")
-            entity_lines.append(f"• {label} → {imdb} | {google}")
-
-    fashion = entities.get("fashion") or []
-    if fashion:
-        entity_lines.append("🧥 Fashion")
-        for f in fashion:
-            brand = f.get("brand", "")
-            google = _a("Google", f"https://www.google.com/search?q={_q(brand)}")
-            entity_lines.append(f"• {html.escape(brand)} → {google}")
-
-    beauty = entities.get("beauty_skincare") or []
-    if beauty:
-        entity_lines.append("💄 Beauty & Skincare")
-        for b in beauty:
-            product = b.get("product", "")
-            brand = b.get("brand", "")
-            raw_label = f"{product} by {brand}" if brand else product
-            google = _a("Google", f"https://www.google.com/search?q={_q(raw_label)}")
-            entity_lines.append(f"• {html.escape(raw_label)} → {google}")
-
-    websites = entities.get("websites") or []
-    if websites:
-        entity_lines.append("🌐 Websites")
-        for w in websites:
-            name = w.get("name", "")
-            url = w.get("url", "")
-            label = html.escape(name)
-            entity_lines.append(f"• {label} → {_a(url, url)}" if url else f"• {label}")
-
-    ai_terms = entities.get("ai_terms") or []
-    if ai_terms:
-        entity_lines.append("🤖 AI terms & tips")
-        for a in ai_terms:
-            term = a.get("term", "")
-            google = _a("Google", f"https://www.google.com/search?q={_q(term)}")
-            entity_lines.append(f"• {html.escape(term)} → {google}")
-
-    social = [s for s in (entities.get("social_handles") or [])
-              if "bot" not in (s.get("handle") or "").lower()]
-    if social:
-        entity_lines.append("👤 Social handles")
-        for s in social:
-            h = s.get("handle", "")
-            if h and not h.startswith("@"):
-                h = f"@{h}"
-            google = _a("Google", f"https://www.google.com/search?q={_q(h)}")
-            entity_lines.append(f"• {html.escape(h)} → {google}")
-
-    other = entities.get("other") or []
-    if other:
-        entity_lines.append("📦 Other")
-        for o in other:
-            entity = o.get("entity", "")
-            google = _a("Google", f"https://www.google.com/search?q={_q(entity)}")
-            entity_lines.append(f"• {html.escape(entity)} → {google}")
-
-    if entity_lines:
-        lines.append("🔍 Extracted")
-        lines.extend(entity_lines)
-        lines.append("")
-
-    # --- 3. Summary ---
+    # --- 1. Summary (first) ---
     summary = result.get("summary") or {}
     if isinstance(summary, dict):
         what = html.escape((summary.get("what") or "").strip())
@@ -372,8 +274,153 @@ def format_result(result: dict) -> str:
             lines.append(f"<b>Details:</b> {details}")
         lines.append("")
 
-    # --- 4. Tags ---
-    tag_str = _fmt_tags(result.get("tags") or {})
+    # --- 2. Transcription (second) ---
+    transcription = result.get("transcription") or {}
+    if transcription:
+        lines.append("📝 Transcription")
+        for key in sorted(transcription.keys(), key=_transcription_sort_key):
+            text = (transcription[key] or "").strip()
+            if not text:
+                continue
+            if key.startswith("image_"):
+                n = key.split("_", 1)[1]
+                lines.append(f"&gt; -- Image {n} --")
+                for t_line in text.split("\n"):
+                    if t_line.strip():
+                        lines.append(f"&gt; {html.escape(t_line.strip())}")
+            elif key == "video":
+                for t_line in text.split("\n"):
+                    if t_line.strip():
+                        lines.append(f"&gt; {html.escape(t_line.strip())}")
+            else:
+                # Numeric timestamp key (integer seconds)
+                try:
+                    secs = int(key)
+                    timestamp = f"{secs // 60}:{secs % 60:02d}"
+                    frame_text = " ".join(l.strip() for l in text.split("\n") if l.strip())
+                    lines.append(f"&gt; {timestamp} -- {html.escape(frame_text)}")
+                except ValueError:
+                    lines.append(f"&gt; {html.escape(text)}")
+        lines.append("")
+
+    # --- 3. Extracted entities (third) ---
+    entities = result.get("entities") or {}
+    entity_lines = []
+
+    places = entities.get("places") or []
+    if places:
+        entity_lines.append("📍 Places")
+        for p in places:
+            name = p.get("name", "")
+            typ = p.get("type", "")
+            ctx = f" – {html.escape(typ)}" if typ else ""
+            maps = _a("Maps", f"https://www.google.com/maps/search/{_q(name)}")
+            google = _a("Google", f"https://www.google.com/search?q={_q(name)}")
+            entity_lines.append(f"• <i>{html.escape(name)}</i>{ctx} → {maps} | {google}")
+
+    books = entities.get("books") or []
+    if books:
+        entity_lines.append("📚 Books")
+        for b in books:
+            title = b.get("title", "")
+            author = b.get("author", "")
+            raw_q = f"{title} by {author}" if author else title
+            ctx = f" – by {html.escape(author)}" if author else ""
+            goodreads = _a("Goodreads", f"https://www.goodreads.com/search?q={_q(raw_q)}")
+            google = _a("Google", f"https://www.google.com/search?q={_q(raw_q)}")
+            entity_lines.append(f"• <i>{html.escape(title)}</i>{ctx} → {goodreads} | {google}")
+
+    movies_tv = entities.get("movies_tv") or []
+    if movies_tv:
+        entity_lines.append("🎬 Movies & TV")
+        for m in movies_tv:
+            title = m.get("title", "")
+            imdb = _a("IMDb", f"https://www.imdb.com/find?q={_q(title)}")
+            google = _a("Google", f"https://www.google.com/search?q={_q(title)}")
+            entity_lines.append(f"• <i>{html.escape(title)}</i> → {imdb} | {google}")
+
+    fashion = entities.get("fashion") or []
+    if fashion:
+        entity_lines.append("🧥 Fashion")
+        for f in fashion:
+            brand = f.get("brand", "")
+            google = _a("Google", f"https://www.google.com/search?q={_q(brand)}")
+            entity_lines.append(f"• <i>{html.escape(brand)}</i> → {google}")
+
+    knitting = entities.get("knitting") or []
+    if knitting:
+        entity_lines.append("🧶 Knitting")
+        for k in knitting:
+            pattern = k.get("pattern", "")
+            creator = k.get("creator", "")
+            ctx = f" – by {html.escape(creator)}" if creator else ""
+            ravelry = _a("Ravelry", f"https://www.ravelry.com/search#query={_q(pattern)}")
+            google = _a("Google", f"https://www.google.com/search?q={_q(pattern)}")
+            entity_lines.append(f"• <i>{html.escape(pattern)}</i>{ctx} → {ravelry} | {google}")
+
+    beauty = entities.get("beauty_skincare") or []
+    if beauty:
+        entity_lines.append("💄 Beauty & Skincare")
+        for b in beauty:
+            product = b.get("product", "")
+            brand = b.get("brand", "")
+            ctx = f" – by {html.escape(brand)}" if brand else ""
+            raw_q = f"{product} by {brand}" if brand else product
+            google = _a("Google", f"https://www.google.com/search?q={_q(raw_q)}")
+            entity_lines.append(f"• <i>{html.escape(product)}</i>{ctx} → {google}")
+
+    websites = entities.get("websites") or []
+    if websites:
+        entity_lines.append("🌐 Websites")
+        for w in websites:
+            name = w.get("name", "")
+            url = w.get("url", "")
+            if url:
+                entity_lines.append(f"• <i>{html.escape(name)}</i> → {_a(url, url)}")
+            else:
+                entity_lines.append(f"• <i>{html.escape(name)}</i>")
+
+    ai_terms = entities.get("ai_terms") or []
+    if ai_terms:
+        entity_lines.append("🤖 AI terms & tips")
+        for a in ai_terms:
+            term = a.get("term", "")
+            google = _a("Google", f"https://www.google.com/search?q={_q(term)}")
+            entity_lines.append(f"• <i>{html.escape(term)}</i> → {google}")
+
+    social = [s for s in (entities.get("social_handles") or [])
+              if "bot" not in (s.get("handle") or "").lower()]
+    if social:
+        entity_lines.append("👤 Social handles")
+        for s in social:
+            h = s.get("handle", "")
+            if h and not h.startswith("@"):
+                h = f"@{h}"
+            google = _a("Google", f"https://www.google.com/search?q={_q(h)}")
+            entity_lines.append(f"• <i>{html.escape(h)}</i> → {google}")
+
+    other = (entities.get("other") or [])[:3]  # max 3 items
+    if other:
+        entity_lines.append("📦 Other")
+        for o in other:
+            entity = o.get("entity", "")
+            google = _a("Google", f"https://www.google.com/search?q={_q(entity)}")
+            entity_lines.append(f"• <i>{html.escape(entity)}</i> → {google}")
+
+    if entity_lines:
+        lines.append("🔍 Extracted")
+        lines.extend(entity_lines)
+        lines.append("")
+
+    # --- 4. Folder (fourth) ---
+    tags = result.get("tags") or {}
+    folder_str = _fmt_folder(tags)
+    lines.append("📁 Folder")
+    lines.append(html.escape(folder_str))
+    lines.append("")
+
+    # --- 5. Tags (fifth) ---
+    tag_str = _fmt_tags(tags)
     if tag_str:
         lines.append("🏷️ Tags")
         lines.append(html.escape(tag_str))
@@ -389,9 +436,8 @@ def extract_db_fields(result: dict) -> dict:
         summary_str = str(summary)
 
     tags = result.get("tags") or {}
-    tags_str = _fmt_tags(tags)
-    cat = (tags.get("category") or "#Other").strip() if isinstance(tags, dict) else "#Other"
-    folder = cat.lstrip("#")
+    folder = _fmt_folder(tags).lstrip("#")
+    tags_str = _fmt_tags(tags)  # CTA + extra only, no category
 
     return {
         "summary": summary_str,
@@ -410,7 +456,7 @@ async def process_images(image_list: list[tuple[bytes, str]], caption: str = "")
     descriptions = []
     for i, (img, mime) in enumerate(image_list, 1):
         desc = await _describe_image(img, mime)
-        descriptions.append(f"-- Image {i} --\n{desc}")
+        descriptions.append(f"-- image_{i} --\n{desc}")
     content = "\n\n".join(descriptions)
     if caption:
         content = f"Caption: {caption}\n\n{content}"
@@ -442,15 +488,14 @@ async def process_video(video_bytes: bytes, duration: int = 0) -> dict:
         log.warning("Frame extraction failed: %s", frames)
         frames = []
 
-    # Build labeled content
+    # Build labeled content — use integer seconds as frame keys
     content_parts = []
     if transcript:
         content_parts.append(f"-- video --\n{transcript}")
 
     for frame_bytes, ts_sec in frames:
-        key = f"frame_{ts_sec:03d}"
         desc = await _describe_image(frame_bytes, "image/jpeg")
-        content_parts.append(f"-- {key} --\n{desc}")
+        content_parts.append(f"-- {ts_sec} --\n{desc}")
 
     content = "\n\n".join(content_parts) if content_parts else "No extractable content."
     analysis = await _analyze(content)

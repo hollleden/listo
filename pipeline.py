@@ -46,6 +46,7 @@ Return this exact structure:
     "fashion": [{{"brand": "..."}}],
     "knitting": [{{"pattern": "...", "creator": "..."}}],
     "beauty_skincare": [{{"product": "...", "brand": "..."}}],
+    "health_products": [{{"name": "...", "type": "supplement/medication/skincare/device", "price": "..."}}],
     "websites": [{{"name": "...", "url": "..."}}],
     "ai_terms": [{{"term": "...", "explanation": "one-line explanation"}}],
     "social_handles": [{{"handle": "@username"}}],
@@ -112,6 +113,12 @@ TAGS — from two sources:
   #Parenting = kids, family, education, child development, parenting tips
   #Other = anything that does not fit the above categories
 - tags.extra: lowercase hashtags with underscores not hyphens.
+
+HEALTH PRODUCTS:
+- Extract named medications, supplements, vitamins, pharmacy products, and medical devices into health_products.
+- Include price if visible. Include type (supplement/medication/skincare/device).
+- Examples: Fisiogen Ferro Forte, VITALDIN Melatonin, Cristalmina Spray, magnesium citrate.
+- These should NEVER go in Other.
 
 TITLE:
 - Generate a short specific 3-6 word title capturing what THIS content is about.
@@ -449,6 +456,23 @@ def format_result(result: dict) -> str:
             google = _a("Google", f"https://www.google.com/search?q={_q(raw_q)}")
             rows.append(f"• <i>{html.escape(product)}</i>{ctx} → {google}")
         _cat("BEAUTY & SKINCARE", rows)
+
+    health_products = entities.get("health_products") or []
+    if health_products:
+        rows = []
+        for h in health_products:
+            name = h.get("name", "")
+            typ = h.get("type", "")
+            price = h.get("price", "")
+            ctx_parts = []
+            if typ:
+                ctx_parts.append(html.escape(typ))
+            if price:
+                ctx_parts.append(html.escape(price))
+            ctx = " – " + ", ".join(ctx_parts) if ctx_parts else ""
+            google = _a("Google", f"https://www.google.com/search?q={_q(name)}")
+            rows.append(f"• <i>{html.escape(name)}</i>{ctx} → {google}")
+        _cat("💊 HEALTH PRODUCTS", rows)
 
     websites = entities.get("websites") or []
     if websites:

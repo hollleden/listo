@@ -3,12 +3,15 @@ import base64
 import json
 import logging
 import os
+import tempfile
 
 import httpx
 from mistralai import Mistral
+from openai import AsyncOpenAI
 
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 _client = Mistral(api_key=MISTRAL_API_KEY)
+openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 VISION_MODEL = "pixtral-12b-2409"
 TEXT_MODEL = "mistral-small-latest"
@@ -115,6 +118,26 @@ async def process_images(image_list: list[tuple[bytes, str]], caption: str = "")
 async def process_text(text: str) -> dict:
     analysis = await _analyze(text)
     analysis["raw_content"] = text
+    return analysis
+
+
+async def process_video(video_bytes: bytes, caption: str = "") -> dict:
+    tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+    try:
+        tmp.write(video_bytes)
+        tmp.close()
+        with open(tmp.name, "rb") as f:
+            transcript = await openai_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+                response_format="text",
+            )
+    finally:
+        os.unlink(tmp.name)
+    transcript = transcript.strip() if isinstance(transcript, str) else str(transcript).strip()
+    content = f"{caption}\n\n{transcript}".strip() if caption else transcript
+    analysis = await _analyze(content)
+    analysis["raw_content"] = content
     return analysis
 
 

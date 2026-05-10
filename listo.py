@@ -221,25 +221,21 @@ async def handle_video(message: Message):
         return
 
     video = message.video or message.video_note
-    thumb = getattr(video, "thumbnail", None)
-    caption = message.caption or ""
+    file_size = getattr(video, "file_size", 0) or 0
+    if file_size > 25 * 1024 * 1024:
+        await message.answer("Video is too large (max 25MB). Please send a shorter clip.")
+        return
 
-    status = await message.answer("Analyzing your video...")
+    status = await message.answer("Transcribing video...")
     try:
-        if thumb:
-            thumb_bytes = await _download(thumb.file_id)
-            result = await pipeline.process_images([(thumb_bytes, "image/jpeg")], caption or "Video thumbnail")
-        elif caption:
-            result = await pipeline.process_text(caption)
-        else:
-            await status.delete()
-            await message.answer("Please add a caption to your video so I can save something meaningful.")
-            return
+        video_bytes = await _download(video.file_id)
+        caption = message.caption or ""
+        result = await pipeline.process_video(video_bytes, caption)
         await status.delete()
         await _reply_result(message, result, "video")
     except Exception:
         await status.delete()
-        await message.answer("Something went wrong while analyzing your video. Please try again.")
+        await message.answer("Something went wrong while processing your video. Please try again.")
         log.exception("Video processing failed")
 
 

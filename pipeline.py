@@ -85,12 +85,12 @@ OTHER — strict filter:
 - Only include named products or clearly actionable tips explicitly present in the content.
 - Maximum 3 items. If nothing qualifies, omit OTHER entirely.
 
-TAGS — only from explicit content:
-- Generate tags ONLY from text explicitly visible in the image or spoken aloud in audio.
-- NEVER infer or add themes from your own interpretation of the visual content.
-- If a word does not appear in the transcription or was not spoken, do not use it as a tag.
+TAGS — from two sources:
+- Source A: words explicitly visible in the image or spoken aloud in audio.
+- Source B: relevant topic/genre/context tags inferred from what the content IS about (e.g. if it shows a comic book → #comics, if it's about Barcelona → #barcelona, if it's a recipe → #recipe, if it's travel content → #travel).
+- Always generate at least 2-3 tags. Never leave tags.extra empty.
 - tags.category: EXACTLY ONE from: #Travel #Books #AI #Fashion #Movies #Knitting #Food #Tech #LifeHack #Other
-- tags.extra: lowercase hashtags with underscores not hyphens, sourced strictly from visible/spoken content.
+- tags.extra: lowercase hashtags with underscores not hyphens.
 
 SOCIAL HANDLES:
 - Skip any handle containing "bot" (case insensitive).
@@ -354,7 +354,7 @@ def format_result(result: dict) -> str:
             author = b.get("author", "")
             raw_q = f"{title} by {author}" if author else title
             ctx = f" by {html.escape(author)}" if author else ""
-            goodreads = _a("Goodreads", f"https://www.goodreads.com/search?q={_q(raw_q)}")
+            goodreads = _a("Goodreads", f"https://www.goodreads.com/search?q={_q(title)}")
             google = _a("Google", f"https://www.google.com/search?q={_q(raw_q)}")
             rows.append(f"• <i>{html.escape(title)}</i>{ctx} → {goodreads} | {google}")
         _cat("BOOKS", rows)

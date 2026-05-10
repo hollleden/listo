@@ -66,33 +66,18 @@ async def _download(file_id: str) -> bytes:
 
 async def _reply_result(message: Message, result: dict, media_type: str):
     user_id = message.from_user.id
+    fields = pipeline.extract_db_fields(result)
     database.save_entry(
         user_id=user_id,
         media_type=media_type,
         raw_content=result.get("raw_content", ""),
-        summary=result.get("summary", ""),
-        tags=result.get("tags", ""),
-        folder=result.get("folder", "Other"),
-        fact_check=result.get("fact_check", ""),
-        enrichment=result.get("enrichment", ""),
+        summary=fields["summary"],
+        tags=fields["tags"],
+        folder=fields["folder"],
+        fact_check=fields["fact_check"],
+        enrichment=fields["enrichment"],
     )
-
-    tags_raw = result.get("tags", "")
-    hashtags = " ".join(
-        f"#{t.strip().replace(' ', '_').replace('-', '_').lower()}"
-        for t in tags_raw.split(",")
-        if t.strip()
-    )
-
-    text = (
-        "Saved!\n\n"
-        f"Folder: {result.get('folder', 'Other')}\n\n"
-        f"Summary: {result.get('summary', '')}\n\n"
-        f"Tags: {hashtags or 'none'}\n\n"
-        f"Fact-check: {result.get('fact_check', '')}\n\n"
-        f"Context: {result.get('enrichment', '')}"
-    )
-    await message.answer(text)
+    await message.answer(pipeline.format_result(result))
 
 
 # ---------------------------------------------------------------------------

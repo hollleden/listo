@@ -90,7 +90,27 @@ TAGS — from two sources:
 - Source A: words explicitly visible in the image or spoken aloud in audio.
 - Source B: genre, format, and subject tags based on what the content IS (e.g. #comics, #graphic_novel, #noir, #barcelona, #recipe, #tutorial). Do NOT infer abstract themes or concepts (e.g. do not add #privacy, #freedom, #identity unless those exact words appear in the content).
 - Always generate at least 2-3 tags. Never leave tags.extra empty.
-- tags.category: EXACTLY ONE from: #Travel #Books #AI #Fashion #Movies #Knitting #Food #Tech #LifeHack #Other
+- tags.category: EXACTLY ONE from this list:
+  #Travel = destinations, places to visit, city guides, restaurants, hotels, tourism
+  #Books = books, graphic novels, comics, reading, literature, authors
+  #AI = artificial intelligence, machine learning, LLMs, AI tools, prompting, chatbots
+  #Fashion = clothing, style, accessories, outfits, streetwear, designers
+  #Beauty = skincare, makeup, cosmetics, haircare, SPF, serums, beauty tools, beauty routines
+  #Movies = films, movie trailers, TV series, episodes, cinema, streaming
+  #Knitting = knitting, crochet, yarn, patterns, needlework, fiber arts
+  #Food = recipes, restaurants, cooking, drinks, cuisine, food reviews
+  #Tech = software, apps, gadgets, programming, digital tools, coding, hardware. NOT urban planning, NOT city design
+  #LifeHack = practical tips, productivity, life improvements, urban design, smart everyday solutions
+  #Psychology = mental health, emotions, behavior, relationships, self-awareness, emotional intelligence, mindset
+  #Health = fitness, nutrition, medical, wellness, physical health, exercise, body
+  #Finance = money, investing, budgeting, economics, personal finance, crypto
+  #Design = graphic design, UX/UI, architecture, interior design, visual arts, branding
+  #Language = language learning, Spanish, vocabulary, grammar, linguistics, translation
+  #Nature = plants, animals, outdoors, hiking, ecology, gardening, environment
+  #Music = songs, artists, albums, playlists, concerts, music theory, instruments
+  #Photography = photos, cameras, editing, visual composition, lighting
+  #Parenting = kids, family, education, child development, parenting tips
+  #Other = anything that does not fit the above categories
 - tags.extra: lowercase hashtags with underscores not hyphens.
 
 TITLE:
@@ -286,8 +306,10 @@ def _transcription_sort_key(k: str) -> tuple:
 
 CATEGORY_EMOJI = {
     "#Travel": "🌍", "#Books": "📚", "#AI": "🤖", "#Fashion": "🧥",
-    "#Movies": "🎬", "#Knitting": "🧶", "#Food": "🍽️", "#Tech": "💻",
-    "#LifeHack": "💡", "#Other": "📌",
+    "#Beauty": "💄", "#Movies": "🎬", "#Knitting": "🧶", "#Food": "🍽️",
+    "#Tech": "💻", "#LifeHack": "💡", "#Psychology": "🧠", "#Health": "💪",
+    "#Finance": "💰", "#Design": "🎨", "#Language": "💬", "#Nature": "🌿",
+    "#Music": "🎵", "#Photography": "📷", "#Parenting": "👶", "#Other": "📌",
 }
 
 

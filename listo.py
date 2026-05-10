@@ -146,8 +146,9 @@ async def _flush_media_group(group_id: str):
         await message.answer(_limit_message(), parse_mode=HTML)
         return
 
-    status = await message.answer("Analyzing your images...", parse_mode=HTML)
+    status = None
     try:
+        status = await message.answer("Analyzing your images...", parse_mode=HTML)
         result = await pipeline.process_images(images, "")
         await _safe_delete(status)
         await _reply_result(message, result, "image_group")

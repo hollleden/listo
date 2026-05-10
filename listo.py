@@ -1,8 +1,6 @@
 import asyncio
 import logging
 import os
-import subprocess
-import tempfile
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -24,34 +22,6 @@ DAILY_LIMIT = 20
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-
-# Whisper model — loaded once on first video
-_whisper_model = None
-
-def _get_whisper_model():
-    global _whisper_model
-    if _whisper_model is None:
-        import whisper
-        _whisper_model = whisper.load_model("tiny")
-    return _whisper_model
-
-
-def _transcribe_video(video_bytes: bytes) -> str:
-    import imageio_ffmpeg
-    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-    with tempfile.TemporaryDirectory() as tmpdir:
-        video_path = os.path.join(tmpdir, "video.mp4")
-        audio_path = os.path.join(tmpdir, "audio.wav")
-        with open(video_path, "wb") as f:
-            f.write(video_bytes)
-        subprocess.run(
-            [ffmpeg_exe, "-i", video_path, "-ac", "1", "-ar", "16000", "-y", audio_path],
-            check=True, capture_output=True,
-        )
-        model = _get_whisper_model()
-        result = model.transcribe(audio_path)
-        return result["text"].strip()
-
 
 # Media group accumulator
 _mg_buffer: dict[str, list[tuple[bytes, str]]] = {}   # group_id -> [(bytes, mime)]
@@ -251,49 +221,26 @@ async def handle_video(message: Message):
         return
 
     video = message.video or message.video_note
-    file_size = getattr(video, "file_size", 0) or 0
-    if file_size > 20 * 1024 * 1024:
-        await message.answer("Video is too large (max 20MB). Please send a shorter clip.")
-        return
+    thumb = getattr(video, "thumbnail", None)
+    caption = message.caption or ""
 
-    status = await message.answer("Processing video, this may take ~30 seconds...")
-
+    status = await message.answer("Analyzing your video...")
     try:
-        video_bytes = await _download(video.file_id)
-    except Exception:
-        await status.delete()
-        await message.answer("Could not download your video. Please try again.")
-        log.exception("Video download failed")
-        return
-
-    try:
-        transcript = await asyncio.to_thread(_transcribe_video, video_bytes)
-    except FileNotFoundError:
-        await status.delete()
-        await message.answer("Video processing is unavailable (ffmpeg not installed on server).")
-        log.exception("ffmpeg not found")
-        return
-    except Exception:
-        await status.delete()
-        await message.answer("Could not transcribe your video. Please try again.")
-        log.exception("Video transcription failed")
-        return
-
-    if not transcript:
-        await status.delete()
-        await message.answer("No speech detected in this video.")
-        return
-
-    try:
-        caption = getattr(message, "caption", "") or ""
-        content = f"{caption}\n\n{transcript}".strip() if caption else transcript
-        result = await pipeline.process_text(content)
+        if thumb:
+            thumb_bytes = await _download(thumb.file_id)
+            result = await pipeline.process_images([(thumb_bytes, "image/jpeg")], caption or "Video thumbnail")
+        elif caption:
+            result = await pipeline.process_text(caption)
+        else:
+            await status.delete()
+            await message.answer("Please add a caption to your video so I can save something meaningful.")
+            return
         await status.delete()
         await _reply_result(message, result, "video")
     except Exception:
         await status.delete()
-        await message.answer("Transcript saved but analysis failed. Please try again.")
-        log.exception("Video analysis failed")
+        await message.answer("Something went wrong while analyzing your video. Please try again.")
+        log.exception("Video processing failed")
 
 
 @dp.message(F.text & ~F.text.startswith("/"))
@@ -333,13 +280,6 @@ async def main():
         send_quarterly_review, "cron", month="1,4,7,10", day=1, hour=9, args=[bot]
     )
     scheduler.start()
-
-    # Verify ffmpeg is available via imageio-ffmpeg
-    try:
-        import imageio_ffmpeg
-        log.info("ffmpeg available at %s", imageio_ffmpeg.get_ffmpeg_exe())
-    except Exception:
-        log.warning("imageio-ffmpeg not available — video transcription will fail")
 
     log.info("Listo bot starting...")
     await dp.start_polling(bot, allowed_updates=["message"])

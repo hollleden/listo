@@ -87,7 +87,7 @@ OTHER — strict filter:
 
 TAGS — from two sources:
 - Source A: words explicitly visible in the image or spoken aloud in audio.
-- Source B: relevant topic/genre/context tags inferred from what the content IS about (e.g. if it shows a comic book → #comics, if it's about Barcelona → #barcelona, if it's a recipe → #recipe, if it's travel content → #travel).
+- Source B: genre, format, and subject tags based on what the content IS (e.g. #comics, #graphic_novel, #noir, #barcelona, #recipe, #tutorial). Do NOT infer abstract themes or concepts (e.g. do not add #privacy, #freedom, #identity unless those exact words appear in the content).
 - Always generate at least 2-3 tags. Never leave tags.extra empty.
 - tags.category: EXACTLY ONE from: #Travel #Books #AI #Fashion #Movies #Knitting #Food #Tech #LifeHack #Other
 - tags.extra: lowercase hashtags with underscores not hyphens.
@@ -143,8 +143,10 @@ async def _describe_image(image_bytes: bytes, mime: str = "image/jpeg") -> str:
     return await _call_vision(
         image_bytes,
         mime,
-        "Extract ALL visible text from this image exactly as it appears, line by line. "
-        "Then briefly note any key objects, people, places, or brands not captured by the text.",
+        "Extract every single word of visible text from this image, exactly as written, preserving line breaks. "
+        "Include ALL text: titles, subtitles, author names, descriptions, body text, captions, labels, prices, any small print. "
+        "Do not summarize or paraphrase. Do not stop early. "
+        "After the full text, on a new line starting with 'VISUAL:', briefly note key visual elements, named objects, or brands not already captured in the text.",
     )
 
 

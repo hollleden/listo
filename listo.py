@@ -30,6 +30,18 @@ _mg_tasks: dict[str, asyncio.Task] = {}                # group_id -> timer task
 
 HTML = "HTML"
 
+IGNORE_PHRASES = [
+    "Рад был помочь",
+    "Спасибо, что пользуетесь",
+    "@SaveAsBot",
+    "SaveAsBot",
+]
+
+
+def _should_ignore(message: Message) -> bool:
+    text = message.text or message.caption or ""
+    return any(phrase in text for phrase in IGNORE_PHRASES)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -181,6 +193,8 @@ async def handle_error(event: ErrorEvent):
 
 @dp.message(F.photo | F.document)
 async def handle_photo(message: Message):
+    if _should_ignore(message):
+        return
     # Ignore non-image documents
     if message.document:
         mime = message.document.mime_type or ""
@@ -232,23 +246,28 @@ async def handle_photo(message: Message):
 
 @dp.message(F.video | F.video_note)
 async def handle_video(message: Message):
-    user_id = message.from_user.id
+    if _should_ignore(message):
+        return
 
+    user_id = message.from_user.id
     if not await _can_save(user_id):
         await message.answer(_limit_message(), parse_mode=HTML)
         return
 
     video = message.video or message.video_note
     file_size = getattr(video, "file_size", 0) or 0
-    if file_size > 25 * 1024 * 1024:
-        await message.answer("Video is too large (max 25MB). Please send a shorter clip.", parse_mode=HTML)
+    if file_size > 20 * 1024 * 1024:
+        await message.answer(
+            "Video is too large (max 20MB). Try sending a screenshot instead.",
+            parse_mode=HTML,
+        )
         return
 
+    duration = getattr(video, "duration", 0) or 0
     status = await message.answer("Transcribing video...", parse_mode=HTML)
     try:
         video_bytes = await _download(video.file_id)
-        caption = message.caption or ""
-        result = await pipeline.process_video(video_bytes, caption)
+        result = await pipeline.process_video(video_bytes, duration)
         await _safe_delete(status)
         await _reply_result(message, result, "video")
     except Exception:
@@ -259,8 +278,10 @@ async def handle_video(message: Message):
 
 @dp.message(F.text & ~F.text.startswith("/"))
 async def handle_text(message: Message):
-    user_id = message.from_user.id
+    if _should_ignore(message):
+        return
 
+    user_id = message.from_user.id
     if not await _can_save(user_id):
         await message.answer(_limit_message(), parse_mode=HTML)
         return

@@ -4,6 +4,7 @@ import html
 import json
 import logging
 import os
+import subprocess
 import tempfile
 from urllib.parse import quote_plus
 
@@ -32,8 +33,10 @@ Return this exact structure:
 {{
   "transcription": {{
     "image_1": "all raw visible text from image 1 exactly as it appears, line by line",
-    "image_2": "all raw visible text from image 2 exactly as it appears, line by line",
-    "video": "full speech transcript"
+    "image_2": "all raw visible text from image 2, line by line",
+    "video": "full audio transcript",
+    "frame_003": "all on-screen text visible in the frame at 0:03",
+    "frame_006": "all on-screen text visible in the frame at 0:06"
   }},
   "entities": {{
     "places": [{{"name": "...", "type": "restaurant/city/landmark/etc"}}],
@@ -60,15 +63,19 @@ Return this exact structure:
 }}
 
 Rules:
-- transcription: include only keys matching content labels (image_1, image_2, video). Extract ONLY literally visible/spoken text — do not paraphrase.
+- transcription: only include keys present in the content labels (image_1, image_2, video for audio, frame_NNN for video frames). Extract ONLY literally visible/spoken text — do not paraphrase.
 - entities: include ONLY entities explicitly present in the content. Omit any category with no entries (no empty arrays).
-- Group all extracted entities strictly by category. Each category appears exactly once. All items for a category must be listed consecutively before moving to the next category. Never split a category across multiple sections.
+- Group all extracted entities strictly by category. Each category appears exactly once. All items for a category must be listed consecutively before moving to the next category.
 - social_handles: skip any handle that belongs to a bot (contains "bot" in the name).
 - tags.category: EXACTLY ONE from: #Travel #Books #AI #Fashion #Movies #Knitting #Food #Tech #LifeHack #Other
 - tags.cta: zero or more from: #must_try #paid #free #warning #timely #local #tutorial #list #review
 - tags.extra: lowercase hashtags, underscores not hyphens
 - Return valid JSON only, no markdown fences."""
 
+
+# ---------------------------------------------------------------------------
+# Mistral API calls
+# ---------------------------------------------------------------------------
 
 async def _call_text(prompt: str) -> str:
     async with _semaphore:
@@ -140,6 +147,62 @@ async def _analyze(content: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Video helpers
+# ---------------------------------------------------------------------------
+
+async def _transcribe_audio(video_bytes: bytes) -> str:
+    tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+    try:
+        tmp.write(video_bytes)
+        tmp.close()
+        with open(tmp.name, "rb") as f:
+            transcript = await openai_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+                response_format="text",
+            )
+    finally:
+        os.unlink(tmp.name)
+    return transcript.strip() if isinstance(transcript, str) else str(transcript).strip()
+
+
+def _extract_frames_sync(video_bytes: bytes, duration: int) -> list[tuple[bytes, int]]:
+    """Extract frames at 0:03, 0:06, 0:09… using imageio-ffmpeg. Returns [(jpeg_bytes, seconds)]."""
+    try:
+        import imageio_ffmpeg
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        log.warning("imageio-ffmpeg not available — skipping frame extraction")
+        return []
+
+    interval = 3
+    max_frames = 5
+    effective_duration = max(duration, interval + 1)
+    timestamps = [i * interval for i in range(1, max_frames + 1) if i * interval < effective_duration]
+    if not timestamps:
+        return []
+
+    frames: list[tuple[bytes, int]] = []
+    with tempfile.TemporaryDirectory() as tmpdir:
+        video_path = os.path.join(tmpdir, "video.mp4")
+        with open(video_path, "wb") as f:
+            f.write(video_bytes)
+
+        for ts in timestamps:
+            frame_path = os.path.join(tmpdir, f"frame_{ts}.jpg")
+            result = subprocess.run(
+                [ffmpeg_exe, "-ss", str(ts), "-i", video_path,
+                 "-vframes", "1", "-q:v", "2", "-y", frame_path],
+                capture_output=True,
+            )
+            if result.returncode == 0 and os.path.exists(frame_path):
+                with open(frame_path, "rb") as f:
+                    frames.append((f.read(), ts))
+
+    return frames
+
+
+# ---------------------------------------------------------------------------
 # Formatting helpers
 # ---------------------------------------------------------------------------
 
@@ -169,6 +232,20 @@ def _fmt_tags(tags) -> str:
     return " ".join(parts)
 
 
+def _transcription_label(key: str) -> str:
+    if key.startswith("image_"):
+        return f"Image {key.split('_', 1)[1]}"
+    if key == "video":
+        return "Audio transcript"
+    if key.startswith("frame_"):
+        try:
+            secs = int(key.split("_", 1)[1])
+            return f"Video at {secs // 60}:{secs % 60:02d}"
+        except (ValueError, IndexError):
+            pass
+    return key.replace("_", " ").title()
+
+
 def format_result(result: dict) -> str:
     lines = []
 
@@ -180,13 +257,7 @@ def format_result(result: dict) -> str:
             text = (transcription[key] or "").strip()
             if not text:
                 continue
-            if key.startswith("image_"):
-                label = f"Image {key.split('_', 1)[1]}"
-            elif key == "video":
-                label = "Video"
-            else:
-                label = key.replace("_", " ").title()
-            lines.append(f"-- {label} --")
+            lines.append(f"-- {_transcription_label(key)} --")
             lines.append(html.escape(text))
         lines.append("")
 
@@ -232,9 +303,8 @@ def format_result(result: dict) -> str:
         entity_lines.append("🧥 Fashion")
         for f in fashion:
             brand = f.get("brand", "")
-            label = html.escape(brand)
             google = _a("Google", f"https://www.google.com/search?q={_q(brand)}")
-            entity_lines.append(f"• {label} → {google}")
+            entity_lines.append(f"• {html.escape(brand)} → {google}")
 
     beauty = entities.get("beauty_skincare") or []
     if beauty:
@@ -243,9 +313,8 @@ def format_result(result: dict) -> str:
             product = b.get("product", "")
             brand = b.get("brand", "")
             raw_label = f"{product} by {brand}" if brand else product
-            label = html.escape(raw_label)
             google = _a("Google", f"https://www.google.com/search?q={_q(raw_label)}")
-            entity_lines.append(f"• {label} → {google}")
+            entity_lines.append(f"• {html.escape(raw_label)} → {google}")
 
     websites = entities.get("websites") or []
     if websites:
@@ -254,44 +323,34 @@ def format_result(result: dict) -> str:
             name = w.get("name", "")
             url = w.get("url", "")
             label = html.escape(name)
-            if url:
-                entity_lines.append(f"• {label} → {_a(url, url)}")
-            else:
-                entity_lines.append(f"• {label}")
+            entity_lines.append(f"• {label} → {_a(url, url)}" if url else f"• {label}")
 
     ai_terms = entities.get("ai_terms") or []
     if ai_terms:
         entity_lines.append("🤖 AI terms & tips")
         for a in ai_terms:
             term = a.get("term", "")
-            label = html.escape(term)
             google = _a("Google", f"https://www.google.com/search?q={_q(term)}")
-            entity_lines.append(f"• {label} → {google}")
+            entity_lines.append(f"• {html.escape(term)} → {google}")
 
-    social = entities.get("social_handles") or []
+    social = [s for s in (entities.get("social_handles") or [])
+              if "bot" not in (s.get("handle") or "").lower()]
     if social:
-        filtered = [
-            s for s in social
-            if "bot" not in (s.get("handle") or "").lower()
-        ]
-        if filtered:
-            entity_lines.append("👤 Social handles")
-            for s in filtered:
-                h = s.get("handle", "")
-                if h and not h.startswith("@"):
-                    h = f"@{h}"
-                label = html.escape(h)
-                google = _a("Google", f"https://www.google.com/search?q={_q(h)}")
-                entity_lines.append(f"• {label} → {google}")
+        entity_lines.append("👤 Social handles")
+        for s in social:
+            h = s.get("handle", "")
+            if h and not h.startswith("@"):
+                h = f"@{h}"
+            google = _a("Google", f"https://www.google.com/search?q={_q(h)}")
+            entity_lines.append(f"• {html.escape(h)} → {google}")
 
     other = entities.get("other") or []
     if other:
         entity_lines.append("📦 Other")
         for o in other:
             entity = o.get("entity", "")
-            label = html.escape(entity)
             google = _a("Google", f"https://www.google.com/search?q={_q(entity)}")
-            entity_lines.append(f"• {label} → {google}")
+            entity_lines.append(f"• {html.escape(entity)} → {google}")
 
     if entity_lines:
         lines.append("🔍 Extracted")
@@ -367,23 +426,33 @@ async def process_text(text: str) -> dict:
     return analysis
 
 
-async def process_video(video_bytes: bytes, caption: str = "") -> dict:
-    tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
-    try:
-        tmp.write(video_bytes)
-        tmp.close()
-        with open(tmp.name, "rb") as f:
-            transcript = await openai_client.audio.transcriptions.create(
-                model="whisper-1",
-                file=f,
-                response_format="text",
-            )
-    finally:
-        os.unlink(tmp.name)
-    transcript = transcript.strip() if isinstance(transcript, str) else str(transcript).strip()
-    content = f"-- Video --\n{transcript}"
-    if caption:
-        content = f"Caption: {caption}\n\n{content}"
+async def process_video(video_bytes: bytes, duration: int = 0) -> dict:
+    # Run Whisper transcription (async) and frame extraction (blocking thread) in parallel
+    transcript_task = _transcribe_audio(video_bytes)
+    frames_task = asyncio.to_thread(_extract_frames_sync, video_bytes, duration)
+
+    transcript, frames = await asyncio.gather(
+        transcript_task, frames_task, return_exceptions=True
+    )
+
+    if isinstance(transcript, Exception):
+        log.warning("Audio transcription failed: %s", transcript)
+        transcript = ""
+    if isinstance(frames, Exception):
+        log.warning("Frame extraction failed: %s", frames)
+        frames = []
+
+    # Build labeled content
+    content_parts = []
+    if transcript:
+        content_parts.append(f"-- video --\n{transcript}")
+
+    for frame_bytes, ts_sec in frames:
+        key = f"frame_{ts_sec:03d}"
+        desc = await _describe_image(frame_bytes, "image/jpeg")
+        content_parts.append(f"-- {key} --\n{desc}")
+
+    content = "\n\n".join(content_parts) if content_parts else "No extractable content."
     analysis = await _analyze(content)
     analysis["raw_content"] = content
     return analysis

@@ -64,13 +64,38 @@ Return this exact structure:
 }}
 
 Rules:
-- transcription: only include keys present in the content labels. Images use image_1, image_2. Audio uses video. Video frames use the integer second as the key (3, 6, 9). Extract ONLY literally visible/spoken text — do not paraphrase.
-- entities: include ONLY entities explicitly present in the content. Omit any category with no entries (no empty arrays).
-- other: maximum 3 items only.
+
+TRANSCRIPTION:
+- Extract ALL visible text from every image completely, word for word: titles, descriptions, captions, reviews, body text, small print, labels, prices, usernames — everything.
+- Never stop after the first line or title. Capture the full text as it appears, line by line.
+- Only include keys present in the content labels. Images use image_1, image_2. Audio uses video. Video frames use the integer second as key (3, 6, 9). Do not paraphrase.
+
+ENTITY CATEGORY SELECTION — categorize based on what the post is actually about:
+- A post can appear in multiple categories ONLY if it genuinely contains content from multiple forms (e.g. shows both a book cover and a movie trailer).
+- Post shows a book cover, book pages, reading scene, or book review → Books only.
+- Post shows comic panels or graphic novel pages → Books only (NOT Movies & TV).
+- Post shows a movie trailer, film scene, or TV episode → Movies & TV only.
+- If ambiguous, use visual context to choose the single most accurate category.
+- NEVER add a category just because the entity could theoretically exist in that form.
+- Omit any category with no entries (no empty arrays).
 - Group all extracted entities strictly by category. Each category appears exactly once.
-- social_handles: skip any handle that belongs to a bot (contains "bot" in the name).
+
+OTHER — strict filter:
+- NEVER include generic visual objects or descriptive elements: helmet, goggles, eye, mask, colors, animals, furniture, scenery, body parts, textures, shapes.
+- Only include named products or clearly actionable tips explicitly present in the content.
+- Maximum 3 items. If nothing qualifies, omit OTHER entirely.
+
+TAGS — only from explicit content:
+- Generate tags ONLY from text explicitly visible in the image or spoken aloud in audio.
+- NEVER infer or add themes from your own interpretation of the visual content.
+- If a word does not appear in the transcription or was not spoken, do not use it as a tag.
 - tags.category: EXACTLY ONE from: #Travel #Books #AI #Fashion #Movies #Knitting #Food #Tech #LifeHack #Other
-- tags.extra: all relevant lowercase hashtags with underscores not hyphens — include both descriptive tags and action tags like #must_try #paid #free #warning #timely #local #tutorial #list #review
+- tags.extra: lowercase hashtags with underscores not hyphens, sourced strictly from visible/spoken content.
+
+SOCIAL HANDLES:
+- Skip any handle containing "bot" (case insensitive).
+- Skip @SaveAsBot and any download/utility/service bots.
+
 - Return valid JSON only, no markdown fences."""
 
 

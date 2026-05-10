@@ -117,3 +117,87 @@ def delete_entry(entry_id: int, user_id: int) -> bool:
         )
         conn.commit()
     return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Users / token management
+# ---------------------------------------------------------------------------
+
+_USERS_DDL = """
+    CREATE TABLE IF NOT EXISTS users (
+        user_id    INTEGER PRIMARY KEY,
+        token      TEXT UNIQUE NOT NULL,
+        created_at TEXT DEFAULT (date('now'))
+    )
+"""
+
+
+def ensure_user_token(user_id: int) -> str:
+    import secrets
+    with _conn() as conn:
+        conn.execute(_USERS_DDL)
+        conn.commit()
+        row = conn.execute(
+            "SELECT token FROM users WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        if row:
+            return row[0]
+        token = secrets.token_urlsafe(8)
+        conn.execute(
+            "INSERT INTO users (user_id, token) VALUES (?, ?)", (user_id, token)
+        )
+        conn.commit()
+        return token
+
+
+def get_user_by_token(token: str):
+    with _conn() as conn:
+        conn.execute(_USERS_DDL)
+        row = conn.execute(
+            "SELECT user_id FROM users WHERE token = ?", (token,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+# ---------------------------------------------------------------------------
+# Web API queries
+# ---------------------------------------------------------------------------
+
+def get_entries_web(
+    user_id: int,
+    folder: str = None,
+    query: str = None,
+    limit: int = 100,
+) -> list[dict]:
+    sql = "SELECT id, title, summary, tags, folder, created_at FROM entries WHERE user_id = ?"
+    params: list = [user_id]
+    if folder and folder != "All":
+        sql += " AND folder = ?"
+        params.append(folder)
+    if query:
+        sql += " AND (summary LIKE ? OR tags LIKE ? OR raw_content LIKE ?)"
+        q = f"%{query}%"
+        params.extend([q, q, q])
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    with _conn() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    keys = ["id", "title", "summary", "tags", "folder", "created_at"]
+    return [dict(zip(keys, row)) for row in rows]
+
+
+def get_web_stats(user_id: int) -> dict:
+    with _conn() as conn:
+        total = conn.execute(
+            "SELECT COUNT(*) FROM entries WHERE user_id = ?", (user_id,)
+        ).fetchone()[0]
+        this_week = conn.execute(
+            "SELECT COUNT(*) FROM entries WHERE user_id = ? AND created_at >= date('now', '-7 days')",
+            (user_id,),
+        ).fetchone()[0]
+        top_row = conn.execute(
+            "SELECT folder, COUNT(*) AS c FROM entries WHERE user_id = ? GROUP BY folder ORDER BY c DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        top_folder = top_row[0] if top_row else "None"
+    return {"total": total, "this_week": this_week, "top_folder": top_folder}

@@ -195,6 +195,22 @@ FOLDER_EMOJI = {
 }
 
 
+@dp.message(Command("mypage"))
+async def cmd_mypage(message: Message):
+    user_id = message.from_user.id
+    token = database.ensure_user_token(user_id)
+    domain = os.getenv("RAILWAY_DOMAIN", "")
+    if not domain:
+        await message.answer("Web interface not configured yet.", parse_mode=HTML)
+        return
+    url = f"https://{domain}/app?token={token}"
+    await message.answer(
+        f"Your personal Listo page:\n<a href='{url}'>{url}</a>\n\n"
+        "Bookmark it — everything you save appears there.",
+        parse_mode=HTML,
+    )
+
+
 @dp.message(Command("list"))
 async def cmd_list(message: Message):
     user_id = message.from_user.id
@@ -341,7 +357,19 @@ async def handle_text(message: Message):
 # ---------------------------------------------------------------------------
 
 async def main():
+    from web import create_web_app
+    import aiohttp.web as aio_web
+
     database.init_db()
+
+    # Start web server
+    web_app = create_web_app()
+    runner = aio_web.AppRunner(web_app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 8080))
+    site = aio_web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    log.info("Web server started on port %s", port)
 
     # Clear any active webhook so polling can receive updates
     await bot.delete_webhook(drop_pending_updates=True)

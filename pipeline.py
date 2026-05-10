@@ -114,6 +114,13 @@ TAGS — from two sources:
   #Other = anything that does not fit the above categories
 - tags.extra: lowercase hashtags with underscores not hyphens.
 
+NOISE FILTER:
+- The content may contain website UI text mixed with actual content.
+- Treat as signal: product names, prices, spoken words, headlines, descriptions.
+- Treat as noise and IGNORE: "Añadir al carrito", "Add to cart", "Te gustaría", navigation arrows, star ratings like ★★★★★, "Búsqueda", search bars, pagination, social media buttons, cookie notices, any repeated boilerplate.
+- The audio transcript (key "video") is ALWAYS the primary source of truth.
+- Frame text (integer keys) provides supplementary product/price data only.
+
 HEALTH PRODUCTS:
 - Extract named medications, supplements, vitamins, pharmacy products, and medical devices into health_products.
 - Include price if visible. Include type (supplement/medication/skincare/device).
@@ -176,10 +183,23 @@ async def _describe_image(image_bytes: bytes, mime: str = "image/jpeg") -> str:
     return await _call_vision(
         image_bytes,
         mime,
-        "Extract every single word of visible text from this image, exactly as written, preserving line breaks. "
-        "Include ALL text: titles, subtitles, author names, descriptions, body text, captions, labels, prices, any small print. "
-        "Do not summarize or paraphrase. Do not stop early. "
-        "After the full text, on a new line starting with 'VISUAL:', briefly note key visual elements, named objects, or brands not already captured in the text.",
+        "Extract all visible text from this image exactly as written, line by line.\n"
+        "After the text, on a new line write 'VISUAL:' followed by a single line noting "
+        "only named brands, products, or people visible but not captured in text.\n"
+        "Do not describe UI elements, buttons, icons, decorative elements, or generic objects.",
+    )
+
+
+async def _describe_frame(image_bytes: bytes) -> str:
+    return await _call_vision(
+        image_bytes,
+        "image/jpeg",
+        "Extract only meaningful text from this video frame.\n"
+        "INCLUDE: product names, brand names, prices, headlines, subtitles, key labels.\n"
+        "EXCLUDE: buttons (Add to cart, Buy now, etc.), navigation menus, star ratings, "
+        "search bars, social media UI (likes, shares, arrows), website logos, "
+        "cookie banners, any repeated UI chrome.\n"
+        "Output only the included text, one item per line. If nothing meaningful, return empty.",
     )
 
 
@@ -564,10 +584,38 @@ def extract_db_fields(result: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 async def process_images(image_list: list[tuple[bytes, str]], caption: str = "") -> dict:
-    descriptions = []
-    for i, (img, mime) in enumerate(image_list, 1):
-        desc = await _describe_image(img, mime)
-        descriptions.append(f"-- image_{i} --\n{desc}")
+    raw_descs = []
+    for img, mime in image_list:
+        raw_descs.append(await _describe_image(img, mime))
+
+    # Deduplicate repeated lines when 3+ images (same product appearing in every shot)
+    if len(raw_descs) >= 3:
+        line_counts: dict[str, int] = {}
+        for desc in raw_descs:
+            seen = set()
+            for line in desc.split("\n"):
+                key = line.strip().lower()
+                if key and key not in seen:
+                    line_counts[key] = line_counts.get(key, 0) + 1
+                    seen.add(key)
+        repeated = {k for k, v in line_counts.items() if v >= 3}
+        if repeated:
+            seen_repeated: set[str] = set()
+            deduped = []
+            for desc in raw_descs:
+                lines = []
+                for line in desc.split("\n"):
+                    key = line.strip().lower()
+                    if key in repeated:
+                        if key not in seen_repeated:
+                            lines.append(line)
+                            seen_repeated.add(key)
+                    else:
+                        lines.append(line)
+                deduped.append("\n".join(lines))
+            raw_descs = deduped
+
+    descriptions = [f"-- image_{i} --\n{desc}" for i, desc in enumerate(raw_descs, 1)]
     content = "\n\n".join(descriptions)
     if caption:
         content = f"Caption: {caption}\n\n{content}"
@@ -602,8 +650,9 @@ async def process_video(video_bytes: bytes, duration: int = 0) -> dict:
     if transcript:
         content_parts.append(f"-- video --\n{transcript}")
     for frame_bytes, ts_sec in frames:
-        desc = await _describe_image(frame_bytes, "image/jpeg")
-        content_parts.append(f"-- {ts_sec} --\n{desc}")
+        desc = await _describe_frame(frame_bytes)
+        if len(desc.strip()) >= 10:  # skip empty / UI-only frames
+            content_parts.append(f"-- {ts_sec} --\n{desc}")
 
     content = "\n\n".join(content_parts) if content_parts else "No extractable content."
     analysis = await _analyze(content)

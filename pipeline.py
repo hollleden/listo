@@ -1,9 +1,11 @@
 import asyncio
 import base64
+import html
 import json
 import logging
 import os
 import tempfile
+from urllib.parse import quote_plus
 
 import httpx
 from mistralai import Mistral
@@ -38,6 +40,7 @@ Return this exact structure:
     "books": [{{"title": "...", "author": "..."}}],
     "movies_tv": [{{"title": "..."}}],
     "fashion": [{{"brand": "..."}}],
+    "beauty_skincare": [{{"product": "...", "brand": "..."}}],
     "websites": [{{"name": "...", "url": "..."}}],
     "ai_terms": [{{"term": "..."}}],
     "social_handles": [{{"handle": "@username"}}],
@@ -57,11 +60,13 @@ Return this exact structure:
 }}
 
 Rules:
-- transcription: only include keys that appear in the content labels (image_1, image_2, video). Extract ONLY literally visible text — do not paraphrase or summarise.
-- entities: include ONLY entities explicitly present in the content. Omit any category that has no entries (no empty arrays).
+- transcription: include only keys matching content labels (image_1, image_2, video). Extract ONLY literally visible/spoken text — do not paraphrase.
+- entities: include ONLY entities explicitly present in the content. Omit any category with no entries (no empty arrays).
+- Group all extracted entities strictly by category. Each category appears exactly once. All items for a category must be listed consecutively before moving to the next category. Never split a category across multiple sections.
+- social_handles: skip any handle that belongs to a bot (contains "bot" in the name).
 - tags.category: EXACTLY ONE from: #Travel #Books #AI #Fashion #Movies #Knitting #Food #Tech #LifeHack #Other
 - tags.cta: zero or more from: #must_try #paid #free #warning #timely #local #tutorial #list #review
-- tags.extra: additional lowercase hashtags, underscores not hyphens
+- tags.extra: lowercase hashtags, underscores not hyphens
 - Return valid JSON only, no markdown fences."""
 
 
@@ -135,8 +140,16 @@ async def _analyze(content: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Output formatting
+# Formatting helpers
 # ---------------------------------------------------------------------------
+
+def _q(text: str) -> str:
+    return quote_plus(text)
+
+
+def _a(label: str, url: str) -> str:
+    return f'<a href="{url}">{label}</a>'
+
 
 def _fmt_tags(tags) -> str:
     if isinstance(tags, str):
@@ -159,7 +172,7 @@ def _fmt_tags(tags) -> str:
 def format_result(result: dict) -> str:
     lines = []
 
-    # --- Transcription ---
+    # --- 1. Exact transcription (always first) ---
     transcription = result.get("transcription") or {}
     if transcription:
         lines.append("📝 Exact transcription")
@@ -174,89 +187,137 @@ def format_result(result: dict) -> str:
             else:
                 label = key.replace("_", " ").title()
             lines.append(f"-- {label} --")
-            lines.append(text)
+            lines.append(html.escape(text))
         lines.append("")
 
-    # --- Extracted entities ---
+    # --- 2. Extracted entities ---
     entities = result.get("entities") or {}
     entity_lines = []
 
-    for place in entities.get("places") or []:
-        if not entity_lines or entity_lines[-1] != "📍 Places":
-            entity_lines.append("📍 Places")
-        name = place.get("name", "")
-        typ = place.get("type", "")
-        label = f"{name} ({typ})" if typ else name
-        entity_lines.append(f"- {label} → Maps | Google")
+    places = entities.get("places") or []
+    if places:
+        entity_lines.append("📍 Places")
+        for p in places:
+            name = p.get("name", "")
+            typ = p.get("type", "")
+            label = html.escape(f"{name} ({typ})" if typ else name)
+            maps = _a("Maps", f"https://www.google.com/maps/search/{_q(name)}")
+            google = _a("Google", f"https://www.google.com/search?q={_q(name)}")
+            entity_lines.append(f"• {label} → {maps} | {google}")
 
-    for book in entities.get("books") or []:
-        if not entity_lines or entity_lines[-1] != "📚 Books":
-            entity_lines.append("📚 Books")
-        title = book.get("title", "")
-        author = book.get("author", "")
-        label = f"{title} by {author}" if author else title
-        entity_lines.append(f"- {label} → Goodreads | Google")
+    books = entities.get("books") or []
+    if books:
+        entity_lines.append("📚 Books")
+        for b in books:
+            title = b.get("title", "")
+            author = b.get("author", "")
+            raw_label = f"{title} by {author}" if author else title
+            label = html.escape(raw_label)
+            goodreads = _a("Goodreads", f"https://www.goodreads.com/search?q={_q(raw_label)}")
+            google = _a("Google", f"https://www.google.com/search?q={_q(raw_label)}")
+            entity_lines.append(f"• {label} → {goodreads} | {google}")
 
-    for movie in entities.get("movies_tv") or []:
-        if not entity_lines or entity_lines[-1] != "🎬 Movies & TV":
-            entity_lines.append("🎬 Movies & TV")
-        entity_lines.append(f"- {movie.get('title', '')} → IMDb | Google")
+    movies_tv = entities.get("movies_tv") or []
+    if movies_tv:
+        entity_lines.append("🎬 Movies & TV")
+        for m in movies_tv:
+            title = m.get("title", "")
+            label = html.escape(title)
+            imdb = _a("IMDb", f"https://www.imdb.com/find?q={_q(title)}")
+            google = _a("Google", f"https://www.google.com/search?q={_q(title)}")
+            entity_lines.append(f"• {label} → {imdb} | {google}")
 
-    for item in entities.get("fashion") or []:
-        if not entity_lines or entity_lines[-1] != "🧥 Fashion":
-            entity_lines.append("🧥 Fashion")
-        entity_lines.append(f"- {item.get('brand', '')} → Store | Google")
+    fashion = entities.get("fashion") or []
+    if fashion:
+        entity_lines.append("🧥 Fashion")
+        for f in fashion:
+            brand = f.get("brand", "")
+            label = html.escape(brand)
+            google = _a("Google", f"https://www.google.com/search?q={_q(brand)}")
+            entity_lines.append(f"• {label} → {google}")
 
-    for site in entities.get("websites") or []:
-        if not entity_lines or entity_lines[-1] != "🌐 Websites":
-            entity_lines.append("🌐 Websites")
-        name = site.get("name", "")
-        url = site.get("url", "")
-        entity_lines.append(f"- {name} → {url}" if url else f"- {name}")
+    beauty = entities.get("beauty_skincare") or []
+    if beauty:
+        entity_lines.append("💄 Beauty & Skincare")
+        for b in beauty:
+            product = b.get("product", "")
+            brand = b.get("brand", "")
+            raw_label = f"{product} by {brand}" if brand else product
+            label = html.escape(raw_label)
+            google = _a("Google", f"https://www.google.com/search?q={_q(raw_label)}")
+            entity_lines.append(f"• {label} → {google}")
 
-    for term in entities.get("ai_terms") or []:
-        if not entity_lines or entity_lines[-1] != "🤖 AI terms & tips":
-            entity_lines.append("🤖 AI terms & tips")
-        entity_lines.append(f"- {term.get('term', '')} → Explain | Google")
+    websites = entities.get("websites") or []
+    if websites:
+        entity_lines.append("🌐 Websites")
+        for w in websites:
+            name = w.get("name", "")
+            url = w.get("url", "")
+            label = html.escape(name)
+            if url:
+                entity_lines.append(f"• {label} → {_a(url, url)}")
+            else:
+                entity_lines.append(f"• {label}")
 
-    for handle in entities.get("social_handles") or []:
-        if not entity_lines or entity_lines[-1] != "👤 Social handles":
+    ai_terms = entities.get("ai_terms") or []
+    if ai_terms:
+        entity_lines.append("🤖 AI terms & tips")
+        for a in ai_terms:
+            term = a.get("term", "")
+            label = html.escape(term)
+            google = _a("Google", f"https://www.google.com/search?q={_q(term)}")
+            entity_lines.append(f"• {label} → {google}")
+
+    social = entities.get("social_handles") or []
+    if social:
+        filtered = [
+            s for s in social
+            if "bot" not in (s.get("handle") or "").lower()
+        ]
+        if filtered:
             entity_lines.append("👤 Social handles")
-        h = handle.get("handle", "")
-        if h and not h.startswith("@"):
-            h = f"@{h}"
-        entity_lines.append(f"- {h} → Google")
+            for s in filtered:
+                h = s.get("handle", "")
+                if h and not h.startswith("@"):
+                    h = f"@{h}"
+                label = html.escape(h)
+                google = _a("Google", f"https://www.google.com/search?q={_q(h)}")
+                entity_lines.append(f"• {label} → {google}")
 
-    for item in entities.get("other") or []:
-        if not entity_lines or entity_lines[-1] != "📦 Other":
-            entity_lines.append("📦 Other")
-        entity_lines.append(f"- {item.get('entity', '')} → Google")
+    other = entities.get("other") or []
+    if other:
+        entity_lines.append("📦 Other")
+        for o in other:
+            entity = o.get("entity", "")
+            label = html.escape(entity)
+            google = _a("Google", f"https://www.google.com/search?q={_q(entity)}")
+            entity_lines.append(f"• {label} → {google}")
 
     if entity_lines:
         lines.append("🔍 Extracted")
         lines.extend(entity_lines)
         lines.append("")
 
-    # --- Summary ---
+    # --- 3. Summary ---
     summary = result.get("summary") or {}
     if isinstance(summary, dict):
-        what = (summary.get("what") or "").strip()
-        details = (summary.get("details") or "").strip()
+        what = html.escape((summary.get("what") or "").strip())
+        details = html.escape((summary.get("details") or "").strip())
     else:
-        what, details = str(summary).strip(), ""
+        what, details = html.escape(str(summary).strip()), ""
     if what or details:
         lines.append("📋 Summary")
         if what:
-            lines.append(f"*What:* {what}")
+            lines.append(f"<b>What:</b> {what}")
         if details:
-            lines.append(f"*Details:* {details}")
+            lines.append(f"<b>Details:</b> {details}")
         lines.append("")
 
-    # --- Tags ---
+    # --- 4. Tags ---
     tag_str = _fmt_tags(result.get("tags") or {})
     if tag_str:
         lines.append("🏷️ Tags")
-        lines.append(tag_str)
+        lines.append(html.escape(tag_str))
 
     return "\n".join(lines).strip()
 

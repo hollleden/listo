@@ -28,6 +28,8 @@ _mg_buffer: dict[str, list[tuple[bytes, str]]] = {}   # group_id -> [(bytes, mim
 _mg_meta: dict[str, dict] = {}                         # group_id -> {user_id, message, caption}
 _mg_tasks: dict[str, asyncio.Task] = {}                # group_id -> timer task
 
+HTML = "HTML"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -77,7 +79,7 @@ async def _reply_result(message: Message, result: dict, media_type: str):
         fact_check=fields["fact_check"],
         enrichment=fields["enrichment"],
     )
-    await message.answer(pipeline.format_result(result))
+    await message.answer(pipeline.format_result(result), parse_mode=HTML)
 
 
 # ---------------------------------------------------------------------------
@@ -99,17 +101,17 @@ async def _flush_media_group(group_id: str):
     caption: str = meta.get("caption", "")
 
     if not await _can_save(user_id):
-        await message.answer(_limit_message())
+        await message.answer(_limit_message(), parse_mode=HTML)
         return
 
-    status = await message.answer("Analyzing your images...")
+    status = await message.answer("Analyzing your images...", parse_mode=HTML)
     try:
         result = await pipeline.process_images(images, caption)
         await status.delete()
         await _reply_result(message, result, "image_group")
     except Exception:
         await status.delete()
-        await message.answer("Something went wrong while analyzing your images. Please try again.")
+        await message.answer("Something went wrong while analyzing your images. Please try again.", parse_mode=HTML)
         log.exception("Media group processing failed")
 
 
@@ -124,7 +126,8 @@ async def cmd_start(message: Message):
         "Send me a photo (or a group of photos) and I'll extract text, summarize, tag, "
         "fact-check, and file it for you.\n"
         "Send a text message and I'll analyze and save it the same way.\n\n"
-        f"Free plan: {DAILY_LIMIT} saves per day. Upgrade to Pro for unlimited."
+        f"Free plan: {DAILY_LIMIT} saves per day. Upgrade to Pro for unlimited.",
+        parse_mode=HTML,
     )
 
 
@@ -132,12 +135,13 @@ async def cmd_start(message: Message):
 async def cmd_help(message: Message):
     await message.answer(
         "How to use Listo:\n"
-        "- Send a photo or group of photos — I'll read text and analyze the image.\n"
-        "- Send any text — I'll summarize, tag, and fact-check it.\n"
-        f"- Free users: up to {DAILY_LIMIT} saves per day.\n\n"
+        "• Send a photo or group of photos — I'll read text and analyze the image.\n"
+        "• Send any text — I'll summarize, tag, and fact-check it.\n"
+        f"• Free users: up to {DAILY_LIMIT} saves per day.\n\n"
         "You also get:\n"
-        "- Weekly digest every Sunday morning\n"
-        "- Quarterly review 4 times a year"
+        "• Weekly digest every Sunday morning\n"
+        "• Quarterly review 4 times a year",
+        parse_mode=HTML,
     )
 
 
@@ -160,7 +164,7 @@ async def handle_photo(message: Message):
     try:
         image_bytes = await _download(file_id)
     except Exception:
-        await message.answer("Could not download your image. Please try again.")
+        await message.answer("Could not download your image. Please try again.", parse_mode=HTML)
         log.exception("File download failed")
         return
 
@@ -183,17 +187,17 @@ async def handle_photo(message: Message):
 
     # Single image
     if not await _can_save(user_id):
-        await message.answer(_limit_message())
+        await message.answer(_limit_message(), parse_mode=HTML)
         return
 
-    status = await message.answer("Analyzing your image...")
+    status = await message.answer("Analyzing your image...", parse_mode=HTML)
     try:
         result = await pipeline.process_images([(image_bytes, mime)], message.caption or "")
         await status.delete()
         await _reply_result(message, result, "image")
     except Exception:
         await status.delete()
-        await message.answer("Something went wrong while analyzing your image. Please try again.")
+        await message.answer("Something went wrong while analyzing your image. Please try again.", parse_mode=HTML)
         log.exception("Single image processing failed")
 
 
@@ -202,16 +206,16 @@ async def handle_video(message: Message):
     user_id = message.from_user.id
 
     if not await _can_save(user_id):
-        await message.answer(_limit_message())
+        await message.answer(_limit_message(), parse_mode=HTML)
         return
 
     video = message.video or message.video_note
     file_size = getattr(video, "file_size", 0) or 0
     if file_size > 25 * 1024 * 1024:
-        await message.answer("Video is too large (max 25MB). Please send a shorter clip.")
+        await message.answer("Video is too large (max 25MB). Please send a shorter clip.", parse_mode=HTML)
         return
 
-    status = await message.answer("Transcribing video...")
+    status = await message.answer("Transcribing video...", parse_mode=HTML)
     try:
         video_bytes = await _download(video.file_id)
         caption = message.caption or ""
@@ -220,7 +224,7 @@ async def handle_video(message: Message):
         await _reply_result(message, result, "video")
     except Exception:
         await status.delete()
-        await message.answer("Something went wrong while processing your video. Please try again.")
+        await message.answer("Something went wrong while processing your video. Please try again.", parse_mode=HTML)
         log.exception("Video processing failed")
 
 
@@ -229,17 +233,17 @@ async def handle_text(message: Message):
     user_id = message.from_user.id
 
     if not await _can_save(user_id):
-        await message.answer(_limit_message())
+        await message.answer(_limit_message(), parse_mode=HTML)
         return
 
-    status = await message.answer("Analyzing your text...")
+    status = await message.answer("Analyzing your text...", parse_mode=HTML)
     try:
         result = await pipeline.process_text(message.text)
         await status.delete()
         await _reply_result(message, result, "text")
     except Exception:
         await status.delete()
-        await message.answer("Something went wrong while analyzing your text. Please try again.")
+        await message.answer("Something went wrong while analyzing your text. Please try again.", parse_mode=HTML)
         log.exception("Text processing failed")
 
 

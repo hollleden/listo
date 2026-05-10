@@ -71,20 +71,20 @@ TRANSCRIPTION:
 - Never stop after the first line or title. Capture the full text as it appears, line by line.
 - Only include keys present in the content labels. Images use image_1, image_2. Audio uses video. Video frames use the integer second as key (3, 6, 9). Do not paraphrase.
 
-ENTITY CATEGORY SELECTION — categorize based on what the post is actually about:
+ENTITY CATEGORY SELECTION:
+- CRITICAL RULE: Only add an entity to Movies & TV if the post LITERALLY SHOWS movie footage, a film poster, a trailer, or a TV episode. A comic book cover is NOT a movie. A book cover is NOT a movie. If you see a drawn/illustrated image, it is Books, not Movies & TV. When in doubt, omit Movies & TV entirely.
 - A post can appear in multiple categories ONLY if it genuinely contains content from multiple forms (e.g. shows both a book cover and a movie trailer).
-- Post shows a book cover, book pages, reading scene, or book review → Books only.
-- Post shows comic panels or graphic novel pages → Books only (NOT Movies & TV).
-- Post shows a movie trailer, film scene, or TV episode → Movies & TV only.
-- If ambiguous, use visual context to choose the single most accurate category.
-- NEVER add a category just because the entity could theoretically exist in that form.
 - Omit any category with no entries (no empty arrays).
 - Group all extracted entities strictly by category. Each category appears exactly once.
 
-OTHER — strict filter:
-- NEVER include generic visual objects or descriptive elements: helmet, goggles, eye, mask, colors, animals, furniture, scenery, body parts, textures, shapes.
-- Only include named products or clearly actionable tips explicitly present in the content.
-- Maximum 3 items. If nothing qualifies, omit OTHER entirely.
+BOOKS:
+- For books, always include the author field if the author name is visible anywhere in the content. Never leave author blank if the name appears in the transcription.
+
+OTHER:
+- CRITICAL RULE: This section is FORBIDDEN from containing any visual descriptions, artistic elements, or scene descriptions. FORBIDDEN examples: "golden robot head", "large eye", "masked figure", "hand holding gun", "futuristic weapon", any color+object combination.
+- ALLOWED examples: a named product like "Nike Air Max", or an actionable tip like "freeze grapes to chill wine".
+- If you cannot think of a named product or actionable tip from the content, omit OTHER entirely.
+- Maximum 3 items.
 
 TAGS — from two sources:
 - Source A: words explicitly visible in the image or spoken aloud in audio.

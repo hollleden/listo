@@ -1,139 +1,97 @@
 import os
-import sqlite3
-from datetime import date
+import secrets
+from datetime import date, timedelta
+from collections import Counter
 
-DB_PATH = os.getenv("DB_PATH", "listo.db")
+import httpx
 
+SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
+SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 
-def _conn():
-    return sqlite3.connect(DB_PATH)
+_HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json",
+}
 
+def _url(table: str) -> str:
+    return f"{SUPABASE_URL}/rest/v1/{table}"
+
+def _h(**extra):
+    return {**_HEADERS, **extra}
 
 def init_db():
-    with _conn() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS entries (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id     INTEGER NOT NULL,
-                created_at  TEXT    NOT NULL DEFAULT (date('now')),
-                media_type  TEXT,
-                raw_content TEXT,
-                summary     TEXT,
-                tags        TEXT,
-                folder      TEXT,
-                fact_check  TEXT,
-                enrichment  TEXT,
-                title       TEXT
-            )
-        """)
-        try:
-            conn.execute("ALTER TABLE entries ADD COLUMN title TEXT")
-        except Exception:
-            pass  # column already exists
-        conn.commit()
+    pass  # Tables created via Supabase SQL Editor
 
+# ── entries ──────────────────────────────────────────────────────────────────
 
-def save_entry(
-    user_id: int,
-    media_type: str,
-    raw_content: str,
-    summary: str,
-    tags: str,
-    folder: str,
-    fact_check: str,
-    enrichment: str,
-    title: str = "",
-):
-    with _conn() as conn:
-        conn.execute(
-            """INSERT INTO entries
-               (user_id, created_at, media_type, raw_content, summary, tags, folder, fact_check, enrichment, title)
-               VALUES (?, date('now'), ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (user_id, media_type, raw_content, summary, tags, folder, fact_check, enrichment, title),
-        )
-        conn.commit()
-
+def save_entry(user_id, media_type, raw_content, summary, tags, folder,
+               fact_check, enrichment, title=""):
+    with httpx.Client() as c:
+        r = c.post(_url("entries"), json={
+            "user_id": user_id, "created_at": str(date.today()),
+            "media_type": media_type, "raw_content": raw_content,
+            "summary": summary, "tags": tags, "folder": folder,
+            "fact_check": fact_check, "enrichment": enrichment, "title": title,
+        }, headers=_h())
+        r.raise_for_status()
 
 def get_today_count(user_id: int) -> int:
-    with _conn() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) FROM entries WHERE user_id = ? AND created_at = date('now')",
-            (user_id,),
-        ).fetchone()
-        return row[0] if row else 0
-
+    with httpx.Client() as c:
+        r = c.get(_url("entries"), params={
+            "select": "id", "user_id": f"eq.{user_id}",
+            "created_at": f"eq.{date.today()}"
+        }, headers=_h(Prefer="count=exact"))
+        cr = r.headers.get("content-range", "*/0")
+        return int(cr.split("/")[-1]) if "/" in cr else 0
 
 def get_entries_since(user_id: int, since_date: str) -> list[dict]:
-    with _conn() as conn:
-        rows = conn.execute(
-            """SELECT created_at, media_type, summary, tags, folder, fact_check, enrichment
-               FROM entries
-               WHERE user_id = ? AND created_at >= ?
-               ORDER BY created_at""",
-            (user_id, since_date),
-        ).fetchall()
-    keys = ["created_at", "media_type", "summary", "tags", "folder", "fact_check", "enrichment"]
-    return [dict(zip(keys, row)) for row in rows]
-
+    with httpx.Client() as c:
+        r = c.get(_url("entries"), params={
+            "select": "created_at,media_type,summary,tags,folder,fact_check,enrichment",
+            "user_id": f"eq.{user_id}", "created_at": f"gte.{since_date}",
+            "order": "created_at.asc",
+        }, headers=_h())
+        r.raise_for_status()
+        return r.json()
 
 def get_active_users() -> list[int]:
-    with _conn() as conn:
-        rows = conn.execute("SELECT DISTINCT user_id FROM entries").fetchall()
-    return [row[0] for row in rows]
-
+    with httpx.Client() as c:
+        r = c.get(_url("entries"), params={"select": "user_id"}, headers=_h())
+        r.raise_for_status()
+        return list({row["user_id"] for row in r.json()})
 
 def get_recent_entries(user_id: int, limit: int = 10) -> list[dict]:
-    with _conn() as conn:
-        rows = conn.execute(
-            """SELECT id, created_at, folder, summary, media_type
-               FROM entries WHERE user_id = ?
-               ORDER BY created_at DESC, id DESC LIMIT ?""",
-            (user_id, limit),
-        ).fetchall()
-    keys = ["id", "created_at", "folder", "summary", "media_type"]
-    return [dict(zip(keys, row)) for row in rows]
-
+    with httpx.Client() as c:
+        r = c.get(_url("entries"), params={
+            "select": "id,created_at,folder,summary,media_type",
+            "user_id": f"eq.{user_id}",
+            "order": "created_at.desc,id.desc", "limit": limit,
+        }, headers=_h())
+        r.raise_for_status()
+        return r.json()
 
 def search_entries(user_id: int, query: str, limit: int = 5) -> list[dict]:
-    pattern = f"%{query}%"
-    with _conn() as conn:
-        rows = conn.execute(
-            """SELECT id, created_at, folder, summary, media_type
-               FROM entries
-               WHERE user_id = ?
-                 AND (summary LIKE ? OR tags LIKE ? OR raw_content LIKE ?)
-               ORDER BY created_at DESC, id DESC LIMIT ?""",
-            (user_id, pattern, pattern, pattern, limit),
-        ).fetchall()
-    keys = ["id", "created_at", "folder", "summary", "media_type"]
-    return [dict(zip(keys, row)) for row in rows]
-
+    q = query.replace("*", "").replace("(", "").replace(")", "")
+    with httpx.Client() as c:
+        r = c.get(_url("entries"), params={
+            "select": "id,created_at,folder,summary,media_type",
+            "user_id": f"eq.{user_id}",
+            "or": f"(summary.ilike.*{q}*,tags.ilike.*{q}*,raw_content.ilike.*{q}*)",
+            "order": "created_at.desc,id.desc", "limit": limit,
+        }, headers=_h())
+        r.raise_for_status()
+        return r.json()
 
 def delete_entry(entry_id: int, user_id: int) -> bool:
-    with _conn() as conn:
-        cur = conn.execute(
-            "DELETE FROM entries WHERE id = ? AND user_id = ?",
-            (entry_id, user_id),
-        )
-        conn.commit()
-    return cur.rowcount > 0
+    with httpx.Client() as c:
+        r = c.delete(_url("entries"), params={
+            "id": f"eq.{entry_id}", "user_id": f"eq.{user_id}"
+        }, headers=_h())
+        r.raise_for_status()
+        return r.status_code in (200, 204)
 
-
-# ---------------------------------------------------------------------------
-# Users / token management
-# ---------------------------------------------------------------------------
-
-_USERS_DDL = """
-    CREATE TABLE IF NOT EXISTS users (
-        user_id    INTEGER PRIMARY KEY,
-        token      TEXT UNIQUE NOT NULL,
-        first_name TEXT,
-        username   TEXT,
-        avatar_url TEXT,
-        created_at TEXT DEFAULT (date('now'))
-    )
-"""
-
+# ── users / tokens ────────────────────────────────────────────────────────────
 
 def _ensure_users_table(conn) -> None:
     conn.execute(_USERS_DDL)
@@ -149,140 +107,61 @@ def _ensure_users_table(conn) -> None:
 
 
 def ensure_user_token(user_id: int) -> str:
-    import secrets
-    with _conn() as conn:
-        _ensure_users_table(conn)
-        conn.commit()
-        row = conn.execute(
-            "SELECT token FROM users WHERE user_id = ?", (user_id,)
-        ).fetchone()
-        if row:
-            return row[0]
+    with httpx.Client() as c:
+        r = c.get(_url("users"), params={
+            "user_id": f"eq.{user_id}", "select": "token"
+        }, headers=_h())
+        r.raise_for_status()
+        rows = r.json()
+        if rows:
+            return rows[0]["token"]
         token = secrets.token_urlsafe(8)
-        conn.execute(
-            "INSERT INTO users (user_id, token) VALUES (?, ?)", (user_id, token)
-        )
-        conn.commit()
+        r2 = c.post(_url("users"), json={
+            "user_id": user_id, "token": token
+        }, headers=_h(Prefer="return=representation"))
+        r2.raise_for_status()
         return token
 
-
-def upsert_user_profile(user_id: int, first_name: str, username: str) -> str:
-    import secrets
-    token = secrets.token_urlsafe(8)
-    with _conn() as conn:
-        _ensure_users_table(conn)
-        conn.commit()
-        conn.execute(
-            """INSERT INTO users (user_id, token, first_name, username)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(user_id) DO UPDATE SET
-                 first_name=excluded.first_name,
-                 username=excluded.username""",
-            (user_id, token, first_name, username),
-        )
-        conn.commit()
-        row = conn.execute(
-            "SELECT token FROM users WHERE user_id = ?", (user_id,)
-        ).fetchone()
-        return row[0]
-
-
-def update_avatar(user_id: int, avatar_url: str) -> None:
-    with _conn() as conn:
-        conn.execute(
-            "UPDATE users SET avatar_url = ? WHERE user_id = ?",
-            (avatar_url, user_id),
-        )
-        conn.commit()
-
-
 def get_user_by_token(token: str):
-    with _conn() as conn:
-        _ensure_users_table(conn)
-        row = conn.execute(
-            "SELECT user_id FROM users WHERE token = ?", (token,)
-        ).fetchone()
-    return row[0] if row else None
+    with httpx.Client() as c:
+        r = c.get(_url("users"), params={
+            "token": f"eq.{token}", "select": "user_id"
+        }, headers=_h())
+        r.raise_for_status()
+        rows = r.json()
+        return rows[0]["user_id"] if rows else None
 
+# ── web API queries ───────────────────────────────────────────────────────────
 
-def get_user_profile(token: str) -> dict | None:
-    with _conn() as conn:
-        _ensure_users_table(conn)
-        row = conn.execute(
-            "SELECT user_id, first_name, username, avatar_url, token FROM users WHERE token = ?",
-            (token,),
-        ).fetchone()
-        if not row:
-            return None
-        user_id, first_name, username, avatar_url, tok = row
-        total = conn.execute(
-            "SELECT COUNT(*) FROM entries WHERE user_id = ?", (user_id,)
-        ).fetchone()[0]
-        first_save = conn.execute(
-            "SELECT MIN(created_at) FROM entries WHERE user_id = ?", (user_id,)
-        ).fetchone()[0]
-    return {
-        "user_id": user_id,
-        "first_name": first_name or "",
-        "username": username or "",
-        "avatar_url": avatar_url or "",
-        "token": tok,
-        "first_save_date": first_save or "",
-        "total_saves": total,
+def get_entries_web(user_id, folder=None, query=None, limit=100) -> list[dict]:
+    params = {
+        "select": "id,title,summary,tags,folder,created_at",
+        "user_id": f"eq.{user_id}", "order": "created_at.desc", "limit": limit,
     }
-
-
-def get_entry_public(entry_id: int) -> dict | None:
-    with _conn() as conn:
-        row = conn.execute(
-            "SELECT id, title, summary, tags, folder, created_at FROM entries WHERE id = ?",
-            (entry_id,),
-        ).fetchone()
-    if not row:
-        return None
-    keys = ["id", "title", "summary", "tags", "folder", "created_at"]
-    return dict(zip(keys, row))
-
-
-# ---------------------------------------------------------------------------
-# Web API queries
-# ---------------------------------------------------------------------------
-
-def get_entries_web(
-    user_id: int,
-    folder: str = None,
-    query: str = None,
-    limit: int = 100,
-) -> list[dict]:
-    sql = "SELECT id, title, summary, tags, folder, created_at FROM entries WHERE user_id = ?"
-    params: list = [user_id]
     if folder and folder != "All":
-        sql += " AND folder = ?"
-        params.append(folder)
+        params["folder"] = f"eq.{folder}"
     if query:
-        sql += " AND (summary LIKE ? OR tags LIKE ? OR raw_content LIKE ?)"
-        q = f"%{query}%"
-        params.extend([q, q, q])
-    sql += " ORDER BY created_at DESC LIMIT ?"
-    params.append(limit)
-    with _conn() as conn:
-        rows = conn.execute(sql, params).fetchall()
-    keys = ["id", "title", "summary", "tags", "folder", "created_at"]
-    return [dict(zip(keys, row)) for row in rows]
-
+        q = query.replace("*", "")
+        params["or"] = f"(summary.ilike.*{q}*,tags.ilike.*{q}*,raw_content.ilike.*{q}*)"
+    with httpx.Client() as c:
+        r = c.get(_url("entries"), params=params, headers=_h())
+        r.raise_for_status()
+        return r.json()
 
 def get_web_stats(user_id: int) -> dict:
-    with _conn() as conn:
-        total = conn.execute(
-            "SELECT COUNT(*) FROM entries WHERE user_id = ?", (user_id,)
-        ).fetchone()[0]
-        this_week = conn.execute(
-            "SELECT COUNT(*) FROM entries WHERE user_id = ? AND created_at >= date('now', '-7 days')",
-            (user_id,),
-        ).fetchone()[0]
-        top_row = conn.execute(
-            "SELECT folder, COUNT(*) AS c FROM entries WHERE user_id = ? GROUP BY folder ORDER BY c DESC LIMIT 1",
-            (user_id,),
-        ).fetchone()
-        top_folder = top_row[0] if top_row else "None"
+    week_ago = str(date.today() - timedelta(days=7))
+    with httpx.Client() as c:
+        rt = c.get(_url("entries"), params={"select": "id", "user_id": f"eq.{user_id}"},
+                   headers=_h(Prefer="count=exact"))
+        total = int(rt.headers.get("content-range","*/0").split("/")[-1])
+
+        rw = c.get(_url("entries"), params={"select": "id", "user_id": f"eq.{user_id}",
+                   "created_at": f"gte.{week_ago}"}, headers=_h(Prefer="count=exact"))
+        this_week = int(rw.headers.get("content-range","*/0").split("/")[-1])
+
+        rf = c.get(_url("entries"), params={"select": "folder", "user_id": f"eq.{user_id}"},
+                   headers=_h())
+        counts = Counter(row["folder"] for row in rf.json() if row.get("folder"))
+        top_folder = counts.most_common(1)[0][0] if counts else "None"
+
     return {"total": total, "this_week": this_week, "top_folder": top_folder}

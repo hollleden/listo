@@ -213,11 +213,8 @@ FOLDER_EMOJI = {
 async def cmd_mypage(message: Message):
     user_id = message.from_user.id
     token = database.ensure_user_token(user_id)
-    domain = os.getenv("RAILWAY_DOMAIN", "")
-    if not domain:
-        await message.answer("Web interface not configured yet.", parse_mode=HTML)
-        return
-    url = f"https://{domain}/app?token={token}"
+    base = os.getenv("LISTO_DASHBOARD_URL", "https://listo.codewords.run")
+    url = f"{base}?token={token}"
     await message.answer(
         f"Your personal Listo page:\n<a href='{url}'>{url}</a>\n\n"
         "Bookmark it — everything you save appears there.",

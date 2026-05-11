@@ -252,3 +252,21 @@ def get_web_stats(user_id: int) -> dict:
         top_folder = counts.most_common(1)[0][0] if counts else "None"
 
     return {"total": total, "this_week": this_week, "top_folder": top_folder}
+
+
+def save_entry(user_id, media_type, raw_content, summary, tags, folder,
+               fact_check, enrichment, title="", message_id=None,
+               formatted_output=None):  # ← add this
+    payload = {
+        "user_id": user_id, "created_at": str(date.today()),
+        "media_type": media_type, "raw_content": raw_content,
+        "summary": summary, "tags": tags, "folder": folder,
+        "fact_check": fact_check, "enrichment": enrichment, "title": title,
+    }
+    if message_id:
+        payload["message_id"] = message_id
+    if formatted_output:
+        payload["formatted_output"] = formatted_output  # ← add this
+    with httpx.Client() as c:
+        r = c.post(_url("entries"), json=payload, headers=_h())
+        r.raise_for_status()

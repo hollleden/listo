@@ -164,6 +164,7 @@ async def _flush_media_group(group_id: str):
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
+    user_id = message.from_user.id
     await message.answer(
         "Welcome to Listo!\n\n"
         "Send me a photo (or a group of photos) and I'll extract text, summarize, tag, "
@@ -172,6 +173,19 @@ async def cmd_start(message: Message):
         f"Free plan: {DAILY_LIMIT} saves per day. Upgrade to Pro for unlimited.",
         parse_mode=HTML,
     )
+    database.upsert_user_profile(
+        user_id=user_id,
+        first_name=message.from_user.first_name or "",
+        username=message.from_user.username or "",
+    )
+    try:
+        photos = await bot.get_user_profile_photos(user_id, limit=1)
+        if photos.photos:
+            file = await bot.get_file(photos.photos[0][-1].file_id)
+            avatar_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+            database.update_avatar(user_id, avatar_url)
+    except Exception:
+        pass
 
 
 @dp.message(Command("help"))
@@ -264,6 +278,11 @@ async def handle_photo(message: Message):
             return
 
     user_id = message.from_user.id
+    database.upsert_user_profile(
+        user_id=user_id,
+        first_name=message.from_user.first_name or "",
+        username=message.from_user.username or "",
+    )
 
     # Check limit before downloading anything
     if not message.media_group_id and not await _can_save(user_id):
@@ -305,6 +324,11 @@ async def handle_photo(message: Message):
 @dp.message(F.video | F.video_note)
 async def handle_video(message: Message):
     user_id = message.from_user.id
+    database.upsert_user_profile(
+        user_id=user_id,
+        first_name=message.from_user.first_name or "",
+        username=message.from_user.username or "",
+    )
     if not await _can_save(user_id):
         await message.answer(_limit_message(), parse_mode=HTML)
         return
@@ -337,6 +361,11 @@ async def handle_text(message: Message):
         return
 
     user_id = message.from_user.id
+    database.upsert_user_profile(
+        user_id=user_id,
+        first_name=message.from_user.first_name or "",
+        username=message.from_user.username or "",
+    )
     if not await _can_save(user_id):
         await message.answer(_limit_message(), parse_mode=HTML)
         return

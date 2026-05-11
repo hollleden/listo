@@ -313,11 +313,38 @@ async def handle_delete(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def handle_me(request: web.Request) -> web.Response:
+    token = _get_token(request)
+    profile = database.get_user_profile(token)
+    if profile is None:
+        return web.json_response({"error": "forbidden"}, status=403)
+    return web.json_response({
+        "first_name":      profile["first_name"],
+        "username":        profile["username"],
+        "avatar_url":      profile["avatar_url"],
+        "first_save_date": profile["first_save_date"],
+        "total_saves":     profile["total_saves"],
+    })
+
+
+async def handle_share(request: web.Request) -> web.Response:
+    try:
+        entry_id = int(request.match_info["id"])
+    except (KeyError, ValueError):
+        return web.json_response({"error": "invalid id"}, status=400)
+    entry = database.get_entry_public(entry_id)
+    if entry is None:
+        return web.json_response({"error": "not found"}, status=404)
+    return web.json_response(entry)
+
+
 def create_web_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/", handle_root)
     app.router.add_get("/app", handle_app)
     app.router.add_get("/api/entries", handle_entries)
     app.router.add_get("/api/stats", handle_stats)
+    app.router.add_get("/api/me", handle_me)
+    app.router.add_get("/api/share/{id}", handle_share)
     app.router.add_delete("/api/entries/{id}", handle_delete)
     return app

@@ -127,15 +127,31 @@ _USERS_DDL = """
     CREATE TABLE IF NOT EXISTS users (
         user_id    INTEGER PRIMARY KEY,
         token      TEXT UNIQUE NOT NULL,
+        first_name TEXT,
+        username   TEXT,
+        avatar_url TEXT,
         created_at TEXT DEFAULT (date('now'))
     )
 """
 
 
+def _ensure_users_table(conn) -> None:
+    conn.execute(_USERS_DDL)
+    for col, typedef in [
+        ("first_name", "TEXT"),
+        ("username", "TEXT"),
+        ("avatar_url", "TEXT"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE users ADD COLUMN {col} {typedef}")
+        except Exception:
+            pass
+
+
 def ensure_user_token(user_id: int) -> str:
     import secrets
     with _conn() as conn:
-        conn.execute(_USERS_DDL)
+        _ensure_users_table(conn)
         conn.commit()
         row = conn.execute(
             "SELECT token FROM users WHERE user_id = ?", (user_id,)
@@ -150,13 +166,82 @@ def ensure_user_token(user_id: int) -> str:
         return token
 
 
+def upsert_user_profile(user_id: int, first_name: str, username: str) -> str:
+    import secrets
+    token = secrets.token_urlsafe(8)
+    with _conn() as conn:
+        _ensure_users_table(conn)
+        conn.commit()
+        conn.execute(
+            """INSERT INTO users (user_id, token, first_name, username)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                 first_name=excluded.first_name,
+                 username=excluded.username""",
+            (user_id, token, first_name, username),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT token FROM users WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return row[0]
+
+
+def update_avatar(user_id: int, avatar_url: str) -> None:
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE users SET avatar_url = ? WHERE user_id = ?",
+            (avatar_url, user_id),
+        )
+        conn.commit()
+
+
 def get_user_by_token(token: str):
     with _conn() as conn:
-        conn.execute(_USERS_DDL)
+        _ensure_users_table(conn)
         row = conn.execute(
             "SELECT user_id FROM users WHERE token = ?", (token,)
         ).fetchone()
     return row[0] if row else None
+
+
+def get_user_profile(token: str) -> dict | None:
+    with _conn() as conn:
+        _ensure_users_table(conn)
+        row = conn.execute(
+            "SELECT user_id, first_name, username, avatar_url, token FROM users WHERE token = ?",
+            (token,),
+        ).fetchone()
+        if not row:
+            return None
+        user_id, first_name, username, avatar_url, tok = row
+        total = conn.execute(
+            "SELECT COUNT(*) FROM entries WHERE user_id = ?", (user_id,)
+        ).fetchone()[0]
+        first_save = conn.execute(
+            "SELECT MIN(created_at) FROM entries WHERE user_id = ?", (user_id,)
+        ).fetchone()[0]
+    return {
+        "user_id": user_id,
+        "first_name": first_name or "",
+        "username": username or "",
+        "avatar_url": avatar_url or "",
+        "token": tok,
+        "first_save_date": first_save or "",
+        "total_saves": total,
+    }
+
+
+def get_entry_public(entry_id: int) -> dict | None:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT id, title, summary, tags, folder, created_at FROM entries WHERE id = ?",
+            (entry_id,),
+        ).fetchone()
+    if not row:
+        return None
+    keys = ["id", "title", "summary", "tags", "folder", "created_at"]
+    return dict(zip(keys, row))
 
 
 # ---------------------------------------------------------------------------

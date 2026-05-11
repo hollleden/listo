@@ -30,13 +30,15 @@ def init_db():
 # ── entries ───────────────────────────────────────────────────────────────────
 
 def save_entry(user_id, media_type, raw_content, summary, tags, folder,
-               fact_check, enrichment, title=""):
+               fact_check, enrichment, title="",
+               tg_message_link="", formatted_output=""):
     with httpx.Client() as c:
         r = c.post(_url("entries"), json={
             "user_id": user_id, "created_at": str(date.today()),
             "media_type": media_type, "raw_content": raw_content,
             "summary": summary, "tags": tags, "folder": folder,
             "fact_check": fact_check, "enrichment": enrichment, "title": title,
+            "tg_message_link": tg_message_link, "formatted_output": formatted_output,
         }, headers=_h())
         r.raise_for_status()
 
@@ -105,7 +107,7 @@ def delete_entry(entry_id: int, user_id: int) -> bool:
 def get_entry_public(entry_id: int) -> dict | None:
     with httpx.Client() as c:
         r = c.get(_url("entries"), params={
-            "select": "id,title,summary,tags,folder,created_at",
+            "select": "id,title,summary,tags,folder,created_at,formatted_output",
             "id": f"eq.{entry_id}", "limit": 1,
         }, headers=_h())
         r.raise_for_status()
@@ -212,10 +214,11 @@ def get_user_profile(token: str) -> dict | None:
 
 # ── web API queries ───────────────────────────────────────────────────────────
 
-def get_entries_web(user_id, folder=None, query=None, limit=100) -> list[dict]:
+def get_entries_web(user_id, folder=None, query=None, limit=20, offset=0) -> list[dict]:
     params = {
-        "select": "id,title,summary,tags,folder,created_at",
-        "user_id": f"eq.{user_id}", "order": "created_at.desc", "limit": limit,
+        "select": "id,title,summary,tags,folder,created_at,tg_message_link,formatted_output",
+        "user_id": f"eq.{user_id}", "order": "created_at.desc",
+        "limit": limit, "offset": offset,
     }
     if folder and folder != "All":
         params["folder"] = f"eq.{folder}"

@@ -285,7 +285,13 @@ async def handle_entries(request: web.Request) -> web.Response:
         return web.json_response({"error": "forbidden"}, status=403)
     folder = request.rel_url.query.get("folder", None)
     query = request.rel_url.query.get("q", None)
-    entries = database.get_entries_web(user_id, folder=folder, query=query)
+    try:
+        limit = int(request.rel_url.query.get("limit", 20))
+        offset = int(request.rel_url.query.get("offset", 0))
+    except ValueError:
+        limit, offset = 20, 0
+    entries = database.get_entries_web(user_id, folder=folder, query=query,
+                                       limit=limit, offset=offset)
     return web.json_response(entries)
 
 

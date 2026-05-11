@@ -111,12 +111,7 @@ async def _download(file_id: str) -> bytes:
 async def _reply_result(message: Message, result: dict, media_type: str):
     user_id = message.from_user.id
     fields = pipeline.extract_db_fields(result)
-    formatted = pipeline.format_result(result)
-
-    chat_id = message.chat.id
-    message_id = message.message_id
-    tg_link = f"https://t.me/c/{abs(chat_id)}/{message_id}"
-
+    formatted = pipeline.format_result(result)  # ← capture the bot output
     database.save_entry(
         user_id=user_id,
         media_type=media_type,
@@ -127,8 +122,8 @@ async def _reply_result(message: Message, result: dict, media_type: str):
         fact_check=fields["fact_check"],
         enrichment=fields["enrichment"],
         title=fields.get("title", ""),
-        tg_message_link=tg_link,
-        formatted_output=formatted,
+        message_id=message.message_id,
+        formatted_output=formatted,  # ← add this
     )
     await _send_long(message, formatted)
 
